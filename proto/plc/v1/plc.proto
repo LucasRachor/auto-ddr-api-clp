@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package plc.v1;
+
+option go_package = "go_auto_ddr_clp/gen/plc/v1;plcv1";
+
+service PLCService {
+  rpc Start         (StartRequest)         returns (CommandResponse);
+  rpc Stop          (StopRequest)          returns (CommandResponse);
+  rpc Reset         (ResetRequest)         returns (CommandResponse);
+  rpc ReadTag       (ReadTagRequest)       returns (ReadTagResponse);
+  rpc WriteTag      (WriteTagRequest)      returns (CommandResponse);
+  rpc GetStatus     (GetStatusRequest)     returns (StatusResponse);
+  rpc Healthcheck   (HealthcheckRequest)   returns (HealthcheckResponse);
+  rpc SubscribeTags (SubscribeTagsRequest) returns (stream TagUpdate);
+}
+
+message StartRequest  {}
+message StopRequest   {}
+message ResetRequest  {}
+
+message CommandResponse {
+  bool   ok      = 1;
+  string message = 2;
+}
+
+message TagValue {
+  oneof kind {
+    bool   bool_val   = 1;
+    int32  int_val    = 2;
+    int64  dint_val   = 3;
+    float  real_val   = 4;
+    string string_val = 5;
+  }
+}
+
+message ReadTagRequest  { string tag = 1; }
+message ReadTagResponse {
+  string   tag   = 1;
+  TagValue value = 2;
+}
+
+message WriteTagRequest {
+  string   tag   = 1;
+  TagValue value = 2;
+}
+
+message GetStatusRequest {}
+message StatusResponse {
+  string mode    = 1; // RUN | PROGRAM | UNKNOWN
+  bool   faulted = 2;
+  string detail  = 3;
+}
+
+message HealthcheckRequest  {}
+message HealthcheckResponse { bool serving = 1; }
+
+message SubscribeTagsRequest {
+  repeated string tags    = 1;
+  uint32          poll_ms = 2;
+}
+
+message TagUpdate {
+  string   tag        = 1;
+  TagValue value      = 2;
+  int64    ts_unix_ms = 3;
+}
