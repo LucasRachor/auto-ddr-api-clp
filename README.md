@@ -41,6 +41,10 @@ go mod tidy
 CLP_HOST=192.168.250.1 GRPC_ADDR=:50051 go run ./cmd/server
 ```
 
+```ps1
+go run .\cmd\server\main.go
+```
+
 Smoke-test:
 
 ```sh
@@ -55,14 +59,14 @@ concreta da lib `github.com/loki-os/go-ethernet-ip` precisa entrar
 
 Convenções no Sysmac Studio para as tags de comando do template:
 
-| Tag                | Tipo   | Uso                                  |
-|--------------------|--------|--------------------------------------|
-| `gSysCmd_Start`    | BOOL   | Pulso TRUE→FALSE para Start          |
-| `gSysCmd_Stop`     | BOOL   | Pulso TRUE→FALSE para Stop           |
-| `gSysCmd_Reset`    | BOOL   | Pulso TRUE→FALSE para Reset          |
-| `gSys_Mode`        | STRING | "RUN" / "PROGRAM"                    |
-| `gSys_Faulted`     | BOOL   | Flag de falha                        |
-| `gSys_FaultDetail` | STRING | Detalhe legível da falha             |
+| Tag                | Tipo   | Uso                         |
+| ------------------ | ------ | --------------------------- |
+| `gSysCmd_Start`    | BOOL   | Pulso TRUE→FALSE para Start |
+| `gSysCmd_Stop`     | BOOL   | Pulso TRUE→FALSE para Stop  |
+| `gSysCmd_Reset`    | BOOL   | Pulso TRUE→FALSE para Reset |
+| `gSys_Mode`        | STRING | "RUN" / "PROGRAM"           |
+| `gSys_Faulted`     | BOOL   | Flag de falha               |
+| `gSys_FaultDetail` | STRING | Detalhe legível da falha    |
 
 Marque todas com **Network Publish = Publish Only** no Sysmac Studio. NX1P2
 escuta EtherNet/IP em **TCP/UDP 44818**.

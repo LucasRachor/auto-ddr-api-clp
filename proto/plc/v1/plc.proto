@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package plc.v1;
+package plc;
 
 option go_package = "go_auto_ddr_clp/gen/plc/v1;plcv1";
 

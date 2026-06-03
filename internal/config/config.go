@@ -16,7 +16,7 @@ func Load() Config {
 	port, _ := strconv.ParseUint(getenv("CLP_PORT", "44818"), 10, 16)
 	return Config{
 		GRPCAddr: getenv("GRPC_ADDR", ":50051"),
-		CLPHost:  getenv("CLP_HOST", "192.168.250.1"),
+		CLPHost:  getenv("CLP_HOST", "192.168.1.1"),
 		CLPPort:  uint16(port),
 		LogLevel: getenv("LOG_LEVEL", "info"),
 	}

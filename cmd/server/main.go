@@ -12,10 +12,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
+	pb "go_auto_ddr_clp/gen/plc/v1"
 	"go_auto_ddr_clp/internal/config"
 	"go_auto_ddr_clp/internal/plc"
 	"go_auto_ddr_clp/internal/server"
-	// pb "go_auto_ddr_clp/gen/plc/v1"
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 			Timeout: 10 * time.Second,
 		}),
 	)
-	// pb.RegisterPLCServiceServer(gs, srv) // após gerar stubs
+	pb.RegisterPLCServiceServer(gs, srv) // após gerar stubs
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {

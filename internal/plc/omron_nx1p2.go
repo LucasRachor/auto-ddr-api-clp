@@ -33,7 +33,8 @@ type OmronNX1P2 struct {
 
 	mu        sync.Mutex
 	connected bool
-	raw       *eip.EIPTCP
+	//raw       *eip.EIPTCP
+	tags map[string]*eip.Tag
 }
 
 func NewOmronNX1P2(host string, port uint16) *OmronNX1P2 {
@@ -41,27 +42,50 @@ func NewOmronNX1P2(host string, port uint16) *OmronNX1P2 {
 }
 
 func (c *OmronNX1P2) Connect(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.connected {
-		return nil
-	}
-	_ = ctx
-	cfg := eip.DefaultConfig()
-	if c.port != 0 {
-		cfg.TCPPort = c.port
-	}
-	cli, err := eip.NewTCP(c.host, cfg)
-	if err != nil {
-		return fmt.Errorf("plc resolve %s:%d: %w", c.host, c.port, err)
-	}
-	// Connect() já chama RegisterSession() internamente.
-	if err := cli.Connect(); err != nil {
-		return fmt.Errorf("plc connect/register %s:%d: %w", c.host, c.port, err)
-	}
-	c.raw = cli
+	// c.mu.Lock()
+	// defer c.mu.Unlock()
+	// if c.connected {
+	// 	return nil
+	// }
+	// _ = ctx
+	// cfg := eip.DefaultConfig()
+	// if c.port != 0 {
+	// 	cfg.TCPPort = c.port
+	// }
+	// cli, err := eip.NewTCP(c.host, cfg)
+	// if err != nil {
+	// 	return fmt.Errorf("plc resolve %s:%d: %w", c.host, c.port, err)
+	// }
+	// // Connect() já chama RegisterSession() internamente.
+	// if err := cli.Connect(); err != nil {
+	// 	return fmt.Errorf("plc connect/register %s:%d: %w", c.host, c.port, err)
+	// }
+	// c.raw = cli
 	c.connected = true
+	c.tags = make(map[string]*eip.Tag)
+
+	// Descobre as tags publicadas pelo CLP e cacheia o map name -> *eip.Tag.
+	// Tags adicionadas/renomeadas no Sysmac exigem reconectar.
+	// all, err := cli.AllTags()
+	// if err != nil {
+	// 	return fmt.Errorf("plc list tags %s:%d: %w", c.host, c.port, err)
+	// }
+	// c.tags = all
 	return nil
+}
+
+// getTag retorna o *eip.Tag do cache; se não existir, inicializa sob demanda.
+func (c *OmronNX1P2) getTag(name string) *eip.Tag {
+	if c.tags == nil {
+		c.tags = make(map[string]*eip.Tag)
+	}
+	if t, ok := c.tags[name]; ok {
+		return t
+	}
+	t := &eip.Tag{}
+	// c.raw.InitializeTag(name, t)
+	c.tags[name] = t
+	return t
 }
 
 func (c *OmronNX1P2) Close() error {
@@ -71,10 +95,11 @@ func (c *OmronNX1P2) Close() error {
 		return nil
 	}
 	var unregErr error
-	if c.raw != nil {
-		unregErr = c.raw.UnRegisterSession()
-	}
-	c.raw = nil
+	//if c.raw != nil {
+	//	unregErr = c.raw.UnRegisterSession()
+	//}
+	//c.raw = nil
+	c.tags = nil
 	c.connected = false
 	if unregErr != nil {
 		return fmt.Errorf("plc unregister session: %w", unregErr)
@@ -107,12 +132,38 @@ func (c *OmronNX1P2) ReadTag(ctx context.Context, tag string) (TagValue, error) 
 		return TagValue{}, ErrNotConnected
 	}
 	_ = ctx
-	// TODO: usar c.raw para ler tag simbólica.
-	//   t, err := c.raw.GetTag(tag)
-	//   if err != nil { return TagValue{}, err }
-	//   if err := t.Read(); err != nil { return TagValue{}, err }
-	//   converter t.Type/Value -> TagValue
-	return TagValue{}, fmt.Errorf("ReadTag(%q): not implemented", tag)
+	t := c.getTag(tag)
+	// if err := t.Read(); err != nil {
+	// 	return TagValue{}, fmt.Errorf("read %s: %w", tag, err)
+	// }
+	switch v := t.GetValue().(type) {
+	case bool:
+		return TagValue{Kind: KindBool, Bool: v}, nil
+	case int8:
+		return TagValue{Kind: KindInt, Int: int32(v)}, nil
+	case int16:
+		return TagValue{Kind: KindInt, Int: int32(v)}, nil
+	case uint8:
+		return TagValue{Kind: KindInt, Int: int32(v)}, nil
+	case uint16:
+		return TagValue{Kind: KindInt, Int: int32(v)}, nil
+	case int32:
+		return TagValue{Kind: KindDInt, DInt: int64(v)}, nil
+	case uint32:
+		return TagValue{Kind: KindDInt, DInt: int64(v)}, nil
+	case int64:
+		return TagValue{Kind: KindDInt, DInt: v}, nil
+	case uint64:
+		return TagValue{Kind: KindDInt, DInt: int64(v)}, nil
+	case float32:
+		return TagValue{Kind: KindReal, Real: v}, nil
+	case float64:
+		return TagValue{Kind: KindReal, Real: float32(v)}, nil
+	case string:
+		return TagValue{Kind: KindString, String: v}, nil
+	default:
+		return TagValue{Kind: KindString, String: t.String()}, nil
+	}
 }
 
 func (c *OmronNX1P2) WriteTag(ctx context.Context, tag string, v TagValue) error {
@@ -120,12 +171,30 @@ func (c *OmronNX1P2) WriteTag(ctx context.Context, tag string, v TagValue) error
 		return ErrNotConnected
 	}
 	_ = ctx
-	// TODO: usar c.raw para escrever tag simbólica.
-	//   t, err := c.raw.GetTag(tag)
-	//   if err != nil { return err }
-	//   t.SetValue(...)
-	//   return t.Write()
-	return fmt.Errorf("WriteTag(%q): not implemented", tag)
+	t := c.getTag(tag)
+	switch v.Kind {
+	case KindBool:
+		// A lib só expõe SetInt32/SetString; para BOOL usamos 0/1.
+		if v.Bool {
+			t.SetInt32(1)
+		} else {
+			t.SetInt32(0)
+		}
+	case KindInt:
+		t.SetInt32(v.Int)
+	case KindDInt:
+		t.SetInt32(int32(v.DInt))
+	case KindString:
+		t.SetString(v.String)
+	case KindReal:
+		return ErrUnsupportedKind
+	default:
+		return ErrUnsupportedKind
+	}
+	if err := t.Write(); err != nil {
+		return fmt.Errorf("write %s: %w", tag, err)
+	}
+	return nil
 }
 
 func (c *OmronNX1P2) Status(ctx context.Context) (Status, error) {
