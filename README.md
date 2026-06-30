@@ -18,14 +18,11 @@ via **EtherNet/IP (CIP, tags simbólicas)**.
 
 ## Gerar stubs protobuf
 
-```sh
+```ps1
 go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
-protoc \
-  --go_out=. --go_opt=module=go_auto_ddr_clp \
-  --go-grpc_out=. --go-grpc_opt=module=go_auto_ddr_clp \
-  proto/plc/v1/plc.proto
+protoc --go_out=. --go_opt=module=go_auto_ddr_clp --go-grpc_out=. --go-grpc_opt=module=go_auto_ddr_clp proto/plc/v1/plc.proto
 ```
 
 Saída esperada em `gen/plc/v1/`. Depois disso descomente as linhas marcadas

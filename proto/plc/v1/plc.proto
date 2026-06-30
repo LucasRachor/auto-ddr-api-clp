@@ -13,6 +13,11 @@ service PLCService {
   rpc GetStatus     (GetStatusRequest)     returns (StatusResponse);
   rpc Healthcheck   (HealthcheckRequest)   returns (HealthcheckResponse);
   rpc SubscribeTags (SubscribeTagsRequest) returns (stream TagUpdate);
+
+  // Fila de comandos com confirmação (ack) e correlação por id.
+  rpc EnqueueCommand         (EnqueueCommandRequest)         returns (EnqueueCommandResponse);
+  rpc SubscribeCommandStatus (SubscribeCommandStatusRequest) returns (stream CommandStatusUpdate);
+  rpc ConfirmStatus          (ConfirmStatusRequest)          returns (CommandResponse);
 }
 
 message StartRequest  {}
@@ -65,3 +70,42 @@ message TagUpdate {
   TagValue value      = 2;
   int64    ts_unix_ms = 3;
 }
+
+// ===== Fila de comandos =====
+
+// Estado de um comando ao longo do ciclo de vida na fila.
+enum CommandState {
+  COMMAND_STATE_UNSPECIFIED = 0;
+  QUEUED                    = 1; // persistido, aguardando despacho
+  DISPATCHED                = 2; // escrito no CLP, aguardando ack
+  ACKED_OK                  = 3; // CLP confirmou execução com sucesso
+  ACKED_ERROR               = 4; // CLP confirmou com erro
+  FAILED                    = 5; // sem ack após retries (dead-letter)
+}
+
+// Comando enviado pelo backend Nest. O id é fornecido pelo Nest e precisa
+// caber em int32 (escrito como DINT no CLP) para correlação do ack.
+message EnqueueCommandRequest {
+  int64  command_id  = 1;
+  string action      = 2; // "insert" (validado contra allowlist)
+  string motherboard = 3;
+  int32  robot       = 4; // 1..2
+  int32  finger      = 5; // 1..5
+}
+
+message EnqueueCommandResponse {
+  bool   accepted   = 1;
+  int64  command_id = 2;
+  string message    = 3;
+}
+
+message CommandStatusUpdate {
+  int64        command_id = 1;
+  CommandState state      = 2;
+  string       detail     = 3;
+  int64        ts_unix_ms = 4;
+}
+
+message SubscribeCommandStatusRequest {} // replay automático no connect
+
+message ConfirmStatusRequest { int64 command_id = 1; }

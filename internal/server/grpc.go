@@ -14,8 +14,8 @@ import (
 // "12 UNIMPLEMENTED: method X not implemented". Cada handler só empacota a
 // resposta sobre os helpers do* já existentes.
 
-func (s *PLCServer) Start(ctx context.Context, _ *pb.StartRequest) (*pb.CommandResponse, error) {
-	if err := s.doStart(ctx); err != nil {
+func (s *PLCServer) Start(ctx context.Context, req *pb.StartRequest) (*pb.CommandResponse, error) {
+	if err := s.doStart(ctx, req); err != nil {
 		return &pb.CommandResponse{Ok: false, Message: err.Error()}, nil
 	}
 	return &pb.CommandResponse{Ok: true}, nil

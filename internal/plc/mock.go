@@ -55,8 +55,19 @@ func (m *Mock) ReadTag(_ context.Context, tag string) (TagValue, error) {
 
 func (m *Mock) WriteTag(_ context.Context, tag string, v TagValue) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.tags[tag] = v
-	m.mu.Unlock()
+	// Simula o handshake de comando do CLP: ao receber gCmd_Req=TRUE, confirma
+	// imediatamente com ACK OK correlacionado pelo id. Permite exercitar a fila
+	// fim-a-fim sem CLP físico (QUEUED -> DISPATCHED -> ACKED_OK).
+	if tag == TagCmdReq && v.Bool {
+		m.tags[TagCmdAckId] = m.tags[TagCmdId]
+		m.tags[TagCmdAckStatus] = TagValue{Kind: KindInt, Int: 1}
+		m.tags[TagCmdAck] = TagValue{Kind: KindBool, Bool: true}
+	}
+	if tag == TagCmdReq && !v.Bool {
+		m.tags[TagCmdAck] = TagValue{Kind: KindBool, Bool: false}
+	}
 	return nil
 }
 
