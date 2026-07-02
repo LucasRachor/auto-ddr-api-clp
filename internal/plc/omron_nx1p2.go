@@ -216,10 +216,12 @@ func (c *OmronNX1P2) WriteBoolDebug(ctx context.Context, name string, val bool) 
 	}
 
 	// Payload do Write Tag Service: {tipo CIP, nº de elementos, valor}.
+	// O NX1P2 trata o BOOL como elemento de 2 bytes (a leitura devolve 2 bytes),
+	// então o valor vai como UInt (16 bits): 0x0001=TRUE, 0x0000=FALSE.
 	io := bufferx.New(nil)
 	io.WL(types.UInt(0x00C1)) // type code BOOL
 	io.WL(types.UInt(1))      // 1 elemento
-	var b types.USInt         // Omron: 0x01=TRUE, 0x00=FALSE (1 byte)
+	var b types.UInt
 	if val {
 		b = 1
 	}
@@ -241,6 +243,221 @@ func (c *OmronNX1P2) WriteBoolDebug(ctx context.Context, name string, val bool) 
 		return fmt.Errorf("writeBoolDebug %q: GeneralStatus=%#x addStatus=%x", name, mrres.GeneralStatus, mrres.AdditionalStatus)
 	}
 	return nil
+}
+
+// ReadTagRaw lê UMA tag publicada por nome (symbolic + UCMM) e devolve o type
+// code CIP (0xC1=BOOL, 0xC3=INT, 0xC4=DINT, 0xCA=REAL, 0xFCE=STRING) e os bytes
+// crus do valor. Útil para descobrir o tipo real de uma tag antes de escrever.
+func (c *OmronNX1P2) ReadTagRaw(ctx context.Context, name string) (typeCode uint16, value []byte, err error) {
+	if !c.connected || c.raw == nil {
+		return 0, nil, ErrNotConnected
+	}
+	_ = ctx
+
+	var paths []byte
+	for _, seg := range strings.Split(name, ".") {
+		paths = packet.Paths(paths, path.DataBuild(path.DataTypeANSI, []byte(seg), true))
+	}
+
+	io := bufferx.New(nil)
+	io.WL(types.UInt(1)) // número de elementos
+
+	mr := packet.NewMessageRouter(packet.ServiceReadTag, paths, io.Bytes())
+	res, err := c.raw.SendRRData(packet.NewUCMM(mr), 10)
+	if err != nil {
+		return 0, nil, fmt.Errorf("readTagRaw send %q: %w", name, err)
+	}
+
+	mrres := new(packet.MessageRouterResponse)
+	mrres.Decode(res.Packet.Items[1].Data)
+	if mrres.GeneralStatus != 0x00 {
+		return 0, nil, fmt.Errorf("readTagRaw %q: GeneralStatus=%#x addStatus=%x", name, mrres.GeneralStatus, mrres.AdditionalStatus)
+	}
+	if len(mrres.ResponseData) < 2 {
+		return 0, nil, fmt.Errorf("readTagRaw %q: resposta curta (%d bytes)", name, len(mrres.ResponseData))
+	}
+	typeCode = binary.LittleEndian.Uint16(mrres.ResponseData[:2])
+	return typeCode, mrres.ResponseData[2:], nil
+}
+
+// ---------------------------------------------------------------------------
+// Escrita genérica por nome (UCMM-direto) — funciona para todos os tipos.
+//
+// A escrita de alto nível da lib (Tag.Write) quebra no NX1P2 porque monta o path
+// por InstanceID/Class 0x6B (exige browse). Aqui usamos o MESMO caminho comprovado
+// do WriteBoolDebug/ReadTagRaw: ANSI Extended Symbolic Segments + Write Tag Service
+// + UCMM direto. O payload do Write Tag é sempre {typeCode, nº de elementos, valor}.
+// ---------------------------------------------------------------------------
+
+// writeTagUCMM é o núcleo: monta o Request Path simbólico ("a.b.c" vira um segmento
+// ANSI por nível), anexa o payload já serializado {typeCode, count, value...} e envia.
+func (c *OmronNX1P2) writeTagUCMM(name string, typeCode types.UInt, count uint16, value []byte) error {
+	if !c.connected || c.raw == nil {
+		return ErrNotConnected
+	}
+
+	var paths []byte
+	for _, seg := range strings.Split(name, ".") {
+		paths = packet.Paths(paths, path.DataBuild(path.DataTypeANSI, []byte(seg), true))
+	}
+
+	io := bufferx.New(nil)
+	io.WL(typeCode)          // type code CIP (2 bytes)
+	io.WL(types.UInt(count)) // nº de elementos (1 para escalar, N para array)
+	io.WL(value)             // bytes do valor, já em little-endian
+
+	mr := packet.NewMessageRouter(packet.ServiceWriteTag, paths, io.Bytes())
+	res, err := c.raw.SendRRData(packet.NewUCMM(mr), 10)
+	if err != nil {
+		return fmt.Errorf("writeTag send %q: %w", name, err)
+	}
+
+	mrres := new(packet.MessageRouterResponse)
+	mrres.Decode(res.Packet.Items[1].Data)
+	if mrres.GeneralStatus != 0x00 {
+		return fmt.Errorf("writeTag %q: GeneralStatus=%#x addStatus=%x",
+			name, mrres.GeneralStatus, mrres.AdditionalStatus)
+	}
+	return nil
+}
+
+// boolAsUInt: o NX1P2 trata BOOL como elemento de 2 bytes (a leitura devolve 2
+// bytes), então TRUE=0x0001, FALSE=0x0000.
+func boolAsUInt(b bool) types.UInt {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// WriteValue escreve qualquer tipo suportado numa tag por nome, via UCMM-direto.
+// Descobre o type code CIP e serializa o payload conforme o Go type de v:
+//
+//	bool     -> BOOL   (2 bytes no NX1P2)     []bool    -> array de BOOL
+//	int8     -> SINT                          []int8    -> array de SINT
+//	uint8    -> USINT                         []uint8   -> array de USINT
+//	int16    -> INT                           []int16   -> array de INT
+//	uint16   -> UINT                          []uint16  -> array de UINT
+//	int32    -> DINT                          []int32   -> array de DINT
+//	uint32   -> UDINT                         []uint32  -> array de UDINT
+//	int64    -> LINT                          []int64   -> array de LINT
+//	uint64   -> ULINT                         []uint64  -> array de ULINT
+//	float32  -> REAL                          []float32 -> array de REAL
+//	float64  -> LREAL                         []float64 -> array de LREAL
+//	string   -> STRING
+//
+// Atenção aos tamanhos: uma tag INT no Sysmac exige int16 (não int32), senão o
+// CLP recusa por descasamento de tamanho (GeneralStatus 0x1F). Para os campos do
+// handshake: Action/Robot/Finger são INT (int16); Id/AckId são DINT (int32).
+func (c *OmronNX1P2) WriteValue(ctx context.Context, name string, v any) error {
+	_ = ctx
+	typeCode, count, payload, err := encodeCIP(v)
+	if err != nil {
+		return fmt.Errorf("writeValue %q: %w", name, err)
+	}
+	return c.writeTagUCMM(name, typeCode, count, payload)
+}
+
+// encodeCIP serializa v no formato de valor do Write Tag Service e devolve o
+// type code CIP e o nº de elementos. Suporta escalares e slices (arrays).
+func encodeCIP(v any) (typeCode types.UInt, count uint16, payload []byte, err error) {
+	io := bufferx.New(nil)
+	switch x := v.(type) {
+	// ---- escalares ----
+	case bool:
+		io.WL(boolAsUInt(x))
+		return eip.BOOL, 1, io.Bytes(), nil
+	case int8:
+		io.WL(x)
+		return eip.SINT, 1, io.Bytes(), nil
+	case uint8:
+		io.WL(x)
+		return eip.USINT, 1, io.Bytes(), nil
+	case int16:
+		io.WL(x)
+		return eip.INT, 1, io.Bytes(), nil
+	case uint16:
+		io.WL(x)
+		return eip.UINT, 1, io.Bytes(), nil
+	case int32:
+		io.WL(x)
+		return eip.DINT, 1, io.Bytes(), nil
+	case uint32:
+		io.WL(x)
+		return eip.UDINT, 1, io.Bytes(), nil
+	case int64:
+		io.WL(x)
+		return eip.LINT, 1, io.Bytes(), nil
+	case uint64:
+		io.WL(x)
+		return eip.ULINT, 1, io.Bytes(), nil
+	case float32:
+		io.WL(x)
+		return eip.REAL, 1, io.Bytes(), nil
+	case float64:
+		io.WL(x)
+		return eip.LREAL, 1, io.Bytes(), nil
+	case string:
+		// STRING do NX1P2: prefixo de tamanho (UDInt, 4 bytes) + os caracteres,
+		// mesmo formato que o parser de leitura da lib assume. Diferente dos tipos
+		// numéricos/BOOL (determinísticos), este layout ainda NÃO foi confirmado no
+		// hardware — valide com um read-back (go run ./cmd/readtag <tag>) na
+		// primeira escrita e ajuste o prefixo (UInt 2 bytes?) se o CLP recusar.
+		io.WL(types.UDInt(len(x)))
+		io.WL([]byte(x))
+		return eip.STRING, 1, io.Bytes(), nil
+
+	// ---- arrays (slices) ----
+	case []bool:
+		for _, e := range x {
+			io.WL(boolAsUInt(e))
+		}
+		return eip.BOOL, uint16(len(x)), io.Bytes(), nil
+	case []int8:
+		io.WL(x)
+		return eip.SINT, uint16(len(x)), io.Bytes(), nil
+	case []uint8:
+		io.WL(x)
+		return eip.USINT, uint16(len(x)), io.Bytes(), nil
+	case []int16:
+		for _, e := range x {
+			io.WL(e)
+		}
+		return eip.INT, uint16(len(x)), io.Bytes(), nil
+	case []uint16:
+		for _, e := range x {
+			io.WL(e)
+		}
+		return eip.UINT, uint16(len(x)), io.Bytes(), nil
+	case []int32:
+		for _, e := range x {
+			io.WL(e)
+		}
+		return eip.DINT, uint16(len(x)), io.Bytes(), nil
+	case []uint32:
+		for _, e := range x {
+			io.WL(e)
+		}
+		return eip.UDINT, uint16(len(x)), io.Bytes(), nil
+	case []int64:
+		for _, e := range x {
+			io.WL(e)
+		}
+		return eip.LINT, uint16(len(x)), io.Bytes(), nil
+	case []float32:
+		for _, e := range x {
+			io.WL(e)
+		}
+		return eip.REAL, uint16(len(x)), io.Bytes(), nil
+	case []float64:
+		for _, e := range x {
+			io.WL(e)
+		}
+		return eip.LREAL, uint16(len(x)), io.Bytes(), nil
+
+	default:
+		return 0, 0, nil, fmt.Errorf("%w: %T", ErrUnsupportedKind, v)
+	}
 }
 
 func (c *OmronNX1P2) Close() error {
@@ -321,35 +538,24 @@ func (c *OmronNX1P2) ReadTag(ctx context.Context, tag string) (TagValue, error) 
 	}
 }
 
+// WriteTag escreve uma tag pela abstração TagValue. Delega para WriteValue (UCMM-
+// direto), escolhendo o tamanho Go que casa com o tipo Sysmac de cada Kind:
+// INT=int16, DINT=int32, REAL=float32, BOOL=bool (2 bytes), STRING=string.
 func (c *OmronNX1P2) WriteTag(ctx context.Context, tag string, v TagValue) error {
-	if !c.connected {
-		return ErrNotConnected
-	}
-	_ = ctx
-	t := c.getTag(tag)
 	switch v.Kind {
 	case KindBool:
-		// A lib só expõe SetInt32/SetString; para BOOL usamos 0/1.
-		if v.Bool {
-			t.SetInt32(1)
-		} else {
-			t.SetInt32(0)
-		}
+		return c.WriteValue(ctx, tag, v.Bool)
 	case KindInt:
-		t.SetInt32(v.Int)
+		return c.WriteValue(ctx, tag, int16(v.Int))
 	case KindDInt:
-		t.SetInt32(int32(v.DInt))
-	case KindString:
-		t.SetString(v.String)
+		return c.WriteValue(ctx, tag, int32(v.DInt))
 	case KindReal:
-		return ErrUnsupportedKind
+		return c.WriteValue(ctx, tag, v.Real)
+	case KindString:
+		return c.WriteValue(ctx, tag, v.String)
 	default:
 		return ErrUnsupportedKind
 	}
-	if err := t.Write(); err != nil {
-		return fmt.Errorf("write %s: %w", tag, err)
-	}
-	return nil
 }
 
 func (c *OmronNX1P2) Status(ctx context.Context) (Status, error) {
