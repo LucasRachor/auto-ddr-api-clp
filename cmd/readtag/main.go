@@ -25,7 +25,7 @@ import (
 var typeNames = map[uint16]string{
 	0xC1: "BOOL", 0xC2: "SINT", 0xC3: "INT", 0xC4: "DINT", 0xC5: "LINT",
 	0xC6: "USINT", 0xC7: "UINT", 0xC8: "UDINT", 0xCA: "REAL", 0xCB: "LREAL",
-	0xFCE: "STRING",
+	0xD0: "STRING", 0xFCE: "STRING",
 }
 
 func main() {
@@ -73,6 +73,13 @@ func main() {
 	case 0xC4, 0xC8: // DINT/UDINT (4 bytes)
 		if len(val) >= 4 {
 			fmt.Printf("valor = %d\n", int32(binary.LittleEndian.Uint32(val)))
+		}
+	case 0xD0: // STRING: [tamanho UInt (2 bytes)][chars]
+		if len(val) >= 2 {
+			n := int(binary.LittleEndian.Uint16(val))
+			if 2+n <= len(val) {
+				fmt.Printf("valor = %q\n", string(val[2:2+n]))
+			}
 		}
 	}
 }

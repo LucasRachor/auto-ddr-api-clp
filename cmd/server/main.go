@@ -37,6 +37,10 @@ func main() {
 	log.Info("plc connected", "host", cfg.CLPHost, "port", cfg.CLPPort)
 	defer clp.Close()
 
+	// Mantém a sessão EtherNet-IP aquecida: o NX1P2 derruba conexões CIP ociosas,
+	// então uma leitura leve periódica evita o reset e reconecta proativamente.
+	go clp.KeepAlive(ctx, 15*time.Second, log)
+
 	// srv := server.New(clp, log)
 	// _ = srv
 

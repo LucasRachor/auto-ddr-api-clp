@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	eip "github.com/loki-os/go-ethernet-ip"
@@ -106,6 +111,70 @@ func (c *OmronNX1P2) Connect(ctx context.Context) error {
 	c.connected = true
 	c.tags = make(map[string]*eip.Tag)
 	return nil
+}
+
+// isConnErr reporta se err indica que a sessão TCP/EtherNet-IP morreu (reset pelo
+// host, EOF, broken pipe). O NX1P2 derruba sessões CIP ociosas, então esses erros
+// são esperados após períodos sem tráfego — a resposta certa é reconectar e repetir,
+// não falhar o comando. Cobre tanto os códigos de erro do net/syscall quanto o texto
+// da mensagem do Winsock em pt-BR (WSAECONNRESET = "cancelamento ... pelo host remoto").
+func isConnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	for _, frag := range []string{
+		"forçado o cancelamento", "cancelamento de uma conexão", // Winsock pt-BR
+		"connection reset", "forcibly closed", "broken pipe",
+		"wsasend", "wsarecv", "use of closed", "eof",
+	} {
+		if strings.Contains(s, frag) {
+			return true
+		}
+	}
+	return false
+}
+
+// reconnect descarta a sessão morta e reestabelece o registro EtherNet-IP. O
+// parâmetro stale é o *eip.EIPTCP que a operação estava usando quando falhou: se
+// c.raw já mudou (outra goroutine reconectou nesse meio tempo), não faz nada,
+// evitando reconexões redundantes concorrentes.
+func (c *OmronNX1P2) reconnect(ctx context.Context, stale *eip.EIPTCP) error {
+	c.mu.Lock()
+	if c.raw != stale {
+		c.mu.Unlock()
+		return nil // já reconectado por outro caminho
+	}
+	if c.raw != nil {
+		_ = c.raw.UnRegisterSession() // best-effort; a sessão pode já estar morta
+	}
+	c.raw = nil
+	c.tags = nil
+	c.connected = false
+	c.mu.Unlock()
+	return c.Connect(ctx)
+}
+
+// withRetry executa op; se falhar com um erro de conexão, reconecta uma única vez
+// e repete. Erros que não são de conexão (ex.: GeneralStatus CIP != 0) passam direto.
+func (c *OmronNX1P2) withRetry(ctx context.Context, op func() error) error {
+	c.mu.Lock()
+	stale := c.raw
+	c.mu.Unlock()
+
+	err := op()
+	if err == nil || !isConnErr(err) {
+		return err
+	}
+	if rerr := c.reconnect(ctx, stale); rerr != nil {
+		return fmt.Errorf("%w (reconexão falhou: %v)", err, rerr)
+	}
+	return op()
 }
 
 // getTag retorna o *eip.Tag do cache; se não existir, inicializa sob demanda.
@@ -291,7 +360,7 @@ func (c *OmronNX1P2) ReadTagRaw(ctx context.Context, name string) (typeCode uint
 
 // writeTagUCMM é o núcleo: monta o Request Path simbólico ("a.b.c" vira um segmento
 // ANSI por nível), anexa o payload já serializado {typeCode, count, value...} e envia.
-func (c *OmronNX1P2) writeTagUCMM(name string, typeCode types.UInt, count uint16, value []byte) error {
+func (c *OmronNX1P2) writeTagUCMM(ctx context.Context, name string, typeCode types.UInt, count uint16, value []byte) error {
 	if !c.connected || c.raw == nil {
 		return ErrNotConnected
 	}
@@ -301,25 +370,32 @@ func (c *OmronNX1P2) writeTagUCMM(name string, typeCode types.UInt, count uint16
 		paths = packet.Paths(paths, path.DataBuild(path.DataTypeANSI, []byte(seg), true))
 	}
 
-	io := bufferx.New(nil)
-	io.WL(typeCode)          // type code CIP (2 bytes)
-	io.WL(types.UInt(count)) // nº de elementos (1 para escalar, N para array)
-	io.WL(value)             // bytes do valor, já em little-endian
+	buf := bufferx.New(nil)
+	buf.WL(typeCode)          // type code CIP (2 bytes)
+	buf.WL(types.UInt(count)) // nº de elementos (1 para escalar, N para array)
+	buf.WL(value)             // bytes do valor, já em little-endian
+	mr := packet.NewMessageRouter(packet.ServiceWriteTag, paths, buf.Bytes())
 
-	mr := packet.NewMessageRouter(packet.ServiceWriteTag, paths, io.Bytes())
-	res, err := c.raw.SendRRData(packet.NewUCMM(mr), 10)
-	if err != nil {
-		return fmt.Errorf("writeTag send %q: %w", name, err)
-	}
-
-	mrres := new(packet.MessageRouterResponse)
-	mrres.Decode(res.Packet.Items[1].Data)
-	if mrres.GeneralStatus != 0x00 {
-		return fmt.Errorf("writeTag %q: GeneralStatus=%#x addStatus=%x",
-			name, mrres.GeneralStatus, mrres.AdditionalStatus)
-	}
-	return nil
+	// Envolto em withRetry: se a sessão tiver sido derrubada por ociosidade, reconecta
+	// e repete o envio uma vez antes de propagar o erro.
+	return c.withRetry(ctx, func() error {
+		res, err := c.raw.SendRRData(packet.NewUCMM(mr), 10)
+		if err != nil {
+			return fmt.Errorf("writeTag send %q: %w", name, err)
+		}
+		mrres := new(packet.MessageRouterResponse)
+		mrres.Decode(res.Packet.Items[1].Data)
+		if mrres.GeneralStatus != 0x00 {
+			return fmt.Errorf("writeTag %q: GeneralStatus=%#x addStatus=%x",
+				name, mrres.GeneralStatus, mrres.AdditionalStatus)
+		}
+		return nil
+	})
 }
+
+// cipTypeString é o type code CIP do STRING neste NX1P2 (0xD0), confirmado por
+// read-back. Não usar eip.STRING (0xFCE) no write: o controlador o recusa (0x20).
+const cipTypeString = types.UInt(0x00D0)
 
 // boolAsUInt: o NX1P2 trata BOOL como elemento de 2 bytes (a leitura devolve 2
 // bytes), então TRUE=0x0001, FALSE=0x0000.
@@ -350,12 +426,11 @@ func boolAsUInt(b bool) types.UInt {
 // CLP recusa por descasamento de tamanho (GeneralStatus 0x1F). Para os campos do
 // handshake: Action/Robot/Finger são INT (int16); Id/AckId são DINT (int32).
 func (c *OmronNX1P2) WriteValue(ctx context.Context, name string, v any) error {
-	_ = ctx
 	typeCode, count, payload, err := encodeCIP(v)
 	if err != nil {
 		return fmt.Errorf("writeValue %q: %w", name, err)
 	}
-	return c.writeTagUCMM(name, typeCode, count, payload)
+	return c.writeTagUCMM(ctx, name, typeCode, count, payload)
 }
 
 // encodeCIP serializa v no formato de valor do Write Tag Service e devolve o
@@ -398,14 +473,13 @@ func encodeCIP(v any) (typeCode types.UInt, count uint16, payload []byte, err er
 		io.WL(x)
 		return eip.LREAL, 1, io.Bytes(), nil
 	case string:
-		// STRING do NX1P2: prefixo de tamanho (UDInt, 4 bytes) + os caracteres,
-		// mesmo formato que o parser de leitura da lib assume. Diferente dos tipos
-		// numéricos/BOOL (determinísticos), este layout ainda NÃO foi confirmado no
-		// hardware — valide com um read-back (go run ./cmd/readtag <tag>) na
-		// primeira escrita e ajuste o prefixo (UInt 2 bytes?) se o CLP recusar.
-		io.WL(types.UDInt(len(x)))
+		// STRING no NX1P2 = tipo CIP 0xD0, com layout {tamanho UInt (2 bytes), chars}.
+		// Confirmado por read-back: uma tag STRING volta com tipo=0x00d0 e valor
+		// "05 00 53 54 41 52 54" = len(5) + "START". O type code da lib (eip.STRING
+		// = 0xfce) é recusado com GeneralStatus 0x20 — este controlador usa 0xD0.
+		io.WL(types.UInt(len(x)))
 		io.WL([]byte(x))
-		return eip.STRING, 1, io.Bytes(), nil
+		return cipTypeString, 1, io.Bytes(), nil
 
 	// ---- arrays (slices) ----
 	case []bool:
@@ -479,6 +553,25 @@ func (c *OmronNX1P2) Close() error {
 	return nil
 }
 
+// KeepAlive mantém a sessão EtherNet-IP aquecida fazendo uma leitura leve a cada
+// `every`, evitando que o NX1P2 derrube a conexão CIP por ociosidade. Como ReadTag
+// se auto-recupera, isso também reconecta proativamente caso a sessão já tenha caído.
+// Bloqueia até ctx ser cancelado; rode em uma goroutine.
+func (c *OmronNX1P2) KeepAlive(ctx context.Context, every time.Duration, log *slog.Logger) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if _, err := c.ReadTag(ctx, TagCmdAck); err != nil && log != nil {
+				log.Warn("keepalive falhou", "err", err)
+			}
+		}
+	}
+}
+
 func (c *OmronNX1P2) Start(ctx context.Context) error { return c.pulse(ctx, TagCmdStart) }
 func (c *OmronNX1P2) Stop(ctx context.Context) error  { return c.pulse(ctx, TagCmdStop) }
 func (c *OmronNX1P2) Reset(ctx context.Context) error { return c.pulse(ctx, TagCmdReset) }
@@ -503,10 +596,17 @@ func (c *OmronNX1P2) ReadTag(ctx context.Context, tag string) (TagValue, error) 
 	if !c.connected {
 		return TagValue{}, ErrNotConnected
 	}
-	_ = ctx
-	t := c.getTag(tag)
-	if err := t.Read(); err != nil {
-		return TagValue{}, fmt.Errorf("read %s: %w", tag, err)
+	// getTag é chamado dentro do withRetry porque a reconexão zera o cache de tags:
+	// após reconectar, precisamos de um *eip.Tag reinicializado contra a nova sessão.
+	var t *eip.Tag
+	if err := c.withRetry(ctx, func() error {
+		t = c.getTag(tag)
+		if err := t.Read(); err != nil {
+			return fmt.Errorf("read %s: %w", tag, err)
+		}
+		return nil
+	}); err != nil {
+		return TagValue{}, err
 	}
 	switch v := t.GetValue().(type) {
 	case bool:
