@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -314,18 +315,56 @@ func (c *OmronNX1P2) WriteBoolDebug(ctx context.Context, name string, val bool) 
 	return nil
 }
 
+// symbolicPath monta o Request Path simbólico de uma tag. Cada nível separado por
+// "." vira um segmento ANSI; um sufixo "[i]" (índice de array) vira um segmento
+// lógico de Member/Element (0x28). Ex.: "Itens[0].Numero" ->
+// ANSI(Itens) + Member(0) + ANSI(Numero). Permite acesso a elemento de array e a
+// membro de struct por nome, tanto na leitura quanto na escrita.
+func symbolicPath(name string) ([]byte, error) {
+	var paths []byte
+	for _, seg := range strings.Split(name, ".") {
+		base := seg
+		var indices []int
+		for {
+			open := strings.IndexByte(base, '[')
+			if open < 0 {
+				break
+			}
+			end := strings.IndexByte(base[open:], ']')
+			if end < 0 {
+				return nil, fmt.Errorf("segmento inválido %q (falta ']')", seg)
+			}
+			end += open
+			idx, err := strconv.Atoi(strings.TrimSpace(base[open+1 : end]))
+			if err != nil {
+				return nil, fmt.Errorf("índice inválido em %q: %w", seg, err)
+			}
+			indices = append(indices, idx)
+			base = base[:open] + base[end+1:]
+		}
+		if base != "" {
+			paths = packet.Paths(paths, path.DataBuild(path.DataTypeANSI, []byte(base), true))
+		}
+		for _, idx := range indices {
+			paths = packet.Paths(paths, path.LogicalBuild(path.LogicalTypeMemberID, types.UDInt(idx), true))
+		}
+	}
+	return paths, nil
+}
+
 // ReadTagRaw lê UMA tag publicada por nome (symbolic + UCMM) e devolve o type
 // code CIP (0xC1=BOOL, 0xC3=INT, 0xC4=DINT, 0xCA=REAL, 0xFCE=STRING) e os bytes
 // crus do valor. Útil para descobrir o tipo real de uma tag antes de escrever.
+// Aceita índice de array e membro de struct (ex.: "Itens[0].Numero").
 func (c *OmronNX1P2) ReadTagRaw(ctx context.Context, name string) (typeCode uint16, value []byte, err error) {
 	if !c.connected || c.raw == nil {
 		return 0, nil, ErrNotConnected
 	}
 	_ = ctx
 
-	var paths []byte
-	for _, seg := range strings.Split(name, ".") {
-		paths = packet.Paths(paths, path.DataBuild(path.DataTypeANSI, []byte(seg), true))
+	paths, err := symbolicPath(name)
+	if err != nil {
+		return 0, nil, fmt.Errorf("readTagRaw %q: %w", name, err)
 	}
 
 	io := bufferx.New(nil)
@@ -365,9 +404,9 @@ func (c *OmronNX1P2) writeTagUCMM(ctx context.Context, name string, typeCode typ
 		return ErrNotConnected
 	}
 
-	var paths []byte
-	for _, seg := range strings.Split(name, ".") {
-		paths = packet.Paths(paths, path.DataBuild(path.DataTypeANSI, []byte(seg), true))
+	paths, err := symbolicPath(name)
+	if err != nil {
+		return fmt.Errorf("writeTag %q: %w", name, err)
 	}
 
 	buf := bufferx.New(nil)
@@ -398,18 +437,22 @@ func (c *OmronNX1P2) writeTagUCMM(ctx context.Context, name string, typeCode typ
 // handle" (CRC do template do UDT) nos 2 primeiros bytes do valor.
 const cipTypeStruct = types.UInt(0x02A0)
 
-// WriteStructRaw escreve um tipo ESTRUTURADO (UDT ou ARRAY OF UDT) por nome, via
-// UCMM-direto. Diferente dos tipos atômicos, o Write Tag de um struct usa o formato:
+// WriteStructRaw escreve um tipo ESTRUTURADO (UDT ou ARRAY OF UDT) por nome, num
+// único Write Tag via UCMM-direto. Diferente dos tipos atômicos, o formato é:
 //
-//	[tipo 0x02A0 (2B)][structure handle (2B)][count (2B)][bytes dos membros...]
+//	[tipo 0x02A0 (2B)][structure handle (2B)][count = 1 (2B)][bytes de TODOS os membros]
+//
+// Confirmado por probe no NX1P2 (2026-07-13): o 'count' é SEMPRE 1 (o controlador trata
+// a tag estruturada como um único objeto; count=N com N>1 é recusado com GeneralStatus
+// 0x20). Todos os elementos do array vão concatenados em 'data'.
 //
 // O structure handle (CRC do template do UDT) é lido do próprio controlador antes de
 // escrever (ReadTagRaw devolve o handle nos 2 primeiros bytes do valor de um struct),
-// então não precisa ser hardcoded. 'count' é o nº de elementos do array (1 para um
-// struct único). 'data' são os bytes dos membros já serializados em little-endian, na
-// ordem e no packing exatos do UDT — descubra o layout via ReadTagRaw (ex.: ST_Item =
-// Numero INT(2) + Estado INT(2) + Ligado BOOL(2, padded) = 6 bytes por elemento).
-func (c *OmronNX1P2) WriteStructRaw(ctx context.Context, name string, count uint16, data []byte) error {
+// então não precisa ser hardcoded. 'data' são os bytes de todos os elementos já
+// serializados em little-endian, na ordem e no packing exatos do UDT — descubra o
+// layout via ReadTagRaw (ex.: ST_Item = Numero INT(2) + Estado INT(2) +
+// Ligado BOOL(2, padded) = 6 bytes por elemento).
+func (c *OmronNX1P2) WriteStructRaw(ctx context.Context, name string, data []byte) error {
 	typeCode, cur, err := c.ReadTagRaw(ctx, name)
 	if err != nil {
 		return fmt.Errorf("writeStructRaw %q: leitura do handle falhou: %w", name, err)
@@ -418,42 +461,57 @@ func (c *OmronNX1P2) WriteStructRaw(ctx context.Context, name string, count uint
 		return fmt.Errorf("writeStructRaw %q: tag não é estruturada (tipo=%#04x, %d bytes)", name, typeCode, len(cur))
 	}
 	handle := binary.LittleEndian.Uint16(cur[:2])
-	return c.writeStructUCMM(ctx, name, handle, count, data)
+	return c.writeStructUCMM(ctx, name, handle, data)
 }
 
 // writeStructUCMM monta e envia o Write Tag de um tipo estruturado (ver WriteStructRaw
 // para o formato). Mesmo transporte comprovado do writeTagUCMM (ANSI symbolic + UCMM),
-// só muda o cabeçalho do payload, que inclui o structure handle.
-func (c *OmronNX1P2) writeStructUCMM(ctx context.Context, name string, structHandle, count uint16, data []byte) error {
-	if !c.connected || c.raw == nil {
-		return ErrNotConnected
-	}
-
-	var paths []byte
-	for _, seg := range strings.Split(name, ".") {
-		paths = packet.Paths(paths, path.DataBuild(path.DataTypeANSI, []byte(seg), true))
-	}
-
+// só muda o cabeçalho do payload, que inclui o structure handle e usa count=1.
+func (c *OmronNX1P2) writeStructUCMM(ctx context.Context, name string, structHandle uint16, data []byte) error {
 	buf := bufferx.New(nil)
 	buf.WL(cipTypeStruct)            // 0x02A0: tipo estruturado
 	buf.WL(types.UInt(structHandle)) // handle do template do UDT
-	buf.WL(types.UInt(count))        // nº de elementos
-	buf.WL(data)                     // membros serializados em little-endian
-	mr := packet.NewMessageRouter(packet.ServiceWriteTag, paths, buf.Bytes())
+	buf.WL(types.UInt(1))            // count SEMPRE 1 para struct (confirmado por probe)
+	buf.WL(data)                     // TODOS os membros/elementos em little-endian
+	gs, add, err := c.WriteRawDebug(ctx, name, buf.Bytes())
+	if err != nil {
+		return err
+	}
+	if gs != 0x00 {
+		return fmt.Errorf("writeStruct %q: GeneralStatus=%#x addStatus=%x", name, gs, add)
+	}
+	return nil
+}
 
-	return c.withRetry(ctx, func() error {
+// WriteRawDebug envia um Write Tag Service (0x4D) com o payload COMPLETO já montado
+// (cabeçalho de tipo + count + dados) e devolve o GeneralStatus/AdditionalStatus crus,
+// sem transformar status != 0 em erro. É o primitivo de diagnóstico usado para
+// descobrir qual formato de escrita o controlador aceita (ex.: struct/array de struct).
+// 'err' só é != nil em falha de transporte/conexão.
+func (c *OmronNX1P2) WriteRawDebug(ctx context.Context, name string, payload []byte) (general uint8, additional []byte, err error) {
+	if !c.connected || c.raw == nil {
+		return 0, nil, ErrNotConnected
+	}
+	paths, err := symbolicPath(name)
+	if err != nil {
+		return 0, nil, fmt.Errorf("writeRawDebug %q: %w", name, err)
+	}
+	mr := packet.NewMessageRouter(packet.ServiceWriteTag, paths, payload)
+
+	var gs uint8
+	var add []byte
+	rerr := c.withRetry(ctx, func() error {
 		res, err := c.raw.SendRRData(packet.NewUCMM(mr), 10)
 		if err != nil {
-			return fmt.Errorf("writeStruct send %q: %w", name, err)
+			return fmt.Errorf("writeRawDebug send %q: %w", name, err)
 		}
 		mrres := new(packet.MessageRouterResponse)
 		mrres.Decode(res.Packet.Items[1].Data)
-		if mrres.GeneralStatus != 0x00 {
-			return fmt.Errorf("writeStruct %q: GeneralStatus=%#x addStatus=%x",
-				name, mrres.GeneralStatus, mrres.AdditionalStatus)
-		}
+		gs = uint8(mrres.GeneralStatus)
+		add = mrres.AdditionalStatus
 		return nil
 	})
+	return gs, add, rerr
 }
 
 // cipTypeString é o type code CIP do STRING neste NX1P2 (0xD0), confirmado por

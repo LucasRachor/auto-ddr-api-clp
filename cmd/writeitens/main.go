@@ -70,11 +70,11 @@ func main() {
 		data = append(data, b[:]...)
 	}
 
-	if err := clp.WriteStructRaw(ctx, "Itens", uint16(len(itens)), data); err != nil {
+	if err := clp.WriteStructRaw(ctx, "Itens", data); err != nil {
 		fmt.Printf("write falhou: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("OK: Itens escrito (%d elementos, %d bytes)\n", len(itens), len(data))
+	fmt.Printf("OK: Itens escrito num único frame (%d elementos, %d bytes)\n", len(itens), len(data))
 	for i, it := range itens {
 		fmt.Printf("  Itens[%d] = {Numero:%d Estado:%d Ligado:%v}\n", i, it.Numero, it.Estado, it.Ligado)
 	}
