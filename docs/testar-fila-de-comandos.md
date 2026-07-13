@@ -127,6 +127,7 @@ $env:GRPC_ADDR=":50051"
 $env:QUEUE_DB_PATH="./data/queue.db"
 $env:CMD_ACK_TIMEOUT_MS="5000"
 $env:CMD_MAX_RETRIES="3"
+$env:CMD_POLL_MS="50"
 go run ./cmd/server
 ```
 

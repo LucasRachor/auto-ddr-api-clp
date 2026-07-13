@@ -393,6 +393,69 @@ func (c *OmronNX1P2) writeTagUCMM(ctx context.Context, name string, typeCode typ
 	})
 }
 
+// cipTypeStruct é o type code CIP de um tipo ESTRUTURADO (UDT/array de UDT) no
+// NX1P2 (0x02A0). Um read de um struct volta com este tipo seguido do "structure
+// handle" (CRC do template do UDT) nos 2 primeiros bytes do valor.
+const cipTypeStruct = types.UInt(0x02A0)
+
+// WriteStructRaw escreve um tipo ESTRUTURADO (UDT ou ARRAY OF UDT) por nome, via
+// UCMM-direto. Diferente dos tipos atômicos, o Write Tag de um struct usa o formato:
+//
+//	[tipo 0x02A0 (2B)][structure handle (2B)][count (2B)][bytes dos membros...]
+//
+// O structure handle (CRC do template do UDT) é lido do próprio controlador antes de
+// escrever (ReadTagRaw devolve o handle nos 2 primeiros bytes do valor de um struct),
+// então não precisa ser hardcoded. 'count' é o nº de elementos do array (1 para um
+// struct único). 'data' são os bytes dos membros já serializados em little-endian, na
+// ordem e no packing exatos do UDT — descubra o layout via ReadTagRaw (ex.: ST_Item =
+// Numero INT(2) + Estado INT(2) + Ligado BOOL(2, padded) = 6 bytes por elemento).
+func (c *OmronNX1P2) WriteStructRaw(ctx context.Context, name string, count uint16, data []byte) error {
+	typeCode, cur, err := c.ReadTagRaw(ctx, name)
+	if err != nil {
+		return fmt.Errorf("writeStructRaw %q: leitura do handle falhou: %w", name, err)
+	}
+	if types.UInt(typeCode) != cipTypeStruct || len(cur) < 2 {
+		return fmt.Errorf("writeStructRaw %q: tag não é estruturada (tipo=%#04x, %d bytes)", name, typeCode, len(cur))
+	}
+	handle := binary.LittleEndian.Uint16(cur[:2])
+	return c.writeStructUCMM(ctx, name, handle, count, data)
+}
+
+// writeStructUCMM monta e envia o Write Tag de um tipo estruturado (ver WriteStructRaw
+// para o formato). Mesmo transporte comprovado do writeTagUCMM (ANSI symbolic + UCMM),
+// só muda o cabeçalho do payload, que inclui o structure handle.
+func (c *OmronNX1P2) writeStructUCMM(ctx context.Context, name string, structHandle, count uint16, data []byte) error {
+	if !c.connected || c.raw == nil {
+		return ErrNotConnected
+	}
+
+	var paths []byte
+	for _, seg := range strings.Split(name, ".") {
+		paths = packet.Paths(paths, path.DataBuild(path.DataTypeANSI, []byte(seg), true))
+	}
+
+	buf := bufferx.New(nil)
+	buf.WL(cipTypeStruct)            // 0x02A0: tipo estruturado
+	buf.WL(types.UInt(structHandle)) // handle do template do UDT
+	buf.WL(types.UInt(count))        // nº de elementos
+	buf.WL(data)                     // membros serializados em little-endian
+	mr := packet.NewMessageRouter(packet.ServiceWriteTag, paths, buf.Bytes())
+
+	return c.withRetry(ctx, func() error {
+		res, err := c.raw.SendRRData(packet.NewUCMM(mr), 10)
+		if err != nil {
+			return fmt.Errorf("writeStruct send %q: %w", name, err)
+		}
+		mrres := new(packet.MessageRouterResponse)
+		mrres.Decode(res.Packet.Items[1].Data)
+		if mrres.GeneralStatus != 0x00 {
+			return fmt.Errorf("writeStruct %q: GeneralStatus=%#x addStatus=%x",
+				name, mrres.GeneralStatus, mrres.AdditionalStatus)
+		}
+		return nil
+	})
+}
+
 // cipTypeString é o type code CIP do STRING neste NX1P2 (0xD0), confirmado por
 // read-back. Não usar eip.STRING (0xFCE) no write: o controlador o recusa (0x20).
 const cipTypeString = types.UInt(0x00D0)
