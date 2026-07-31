@@ -4,40 +4,36 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go_auto_ddr_clp/internal/plc"
 )
 
-// Códigos de gCmd_AckStatus retornados pelo CLP.
-const (
-	ackStatusOK    = 1
-	ackStatusError = 2
-)
+var errTimeout = errors.New("timeout aguardando o CLP")
 
-var errAckTimeout = errors.New("timeout aguardando ack do CLP")
-
-// Run é o loop do dispatcher (goroutine única). Consome a fila em ordem FIFO,
-// executando o handshake com o CLP para um comando de cada vez. Bloqueia até
-// ctx ser cancelado.
-func (q *Queue) Run(ctx context.Context) {
-	q.log.Info("dispatcher started", "ack_timeout", q.cfg.AckTimeout,
+// Run é o loop do dispatcher de UM robô. Os slots gLote_*_RoboN são independentes,
+// então roda uma goroutine por robô (ver plc.Robots) e cada uma consome apenas os
+// lotes do seu robô, em ordem FIFO, um por vez. Bloqueia até ctx ser cancelado.
+func (q *Queue) Run(ctx context.Context, robot int32) {
+	q.log.Info("dispatcher started", "robot", robot,
+		"ack_timeout", q.cfg.AckTimeout, "start_timeout", q.cfg.StartTimeout,
 		"max_retries", q.cfg.MaxRetries, "poll", q.cfg.PollEvery)
 	for {
-		rec, ok, err := q.store.NextQueued()
+		rec, ok, err := q.store.NextQueued(robot)
 		if err != nil {
-			q.log.Error("dispatcher: NextQueued", "err", err)
+			q.log.Error("dispatcher: NextQueued", "robot", robot, "err", err)
 			if !q.sleep(ctx, time.Second) {
 				return
 			}
 			continue
 		}
 		if !ok {
-			// Fila vazia: aguarda sinal de Enqueue ou cancelamento.
+			// Fila do robô vazia: aguarda sinal de Enqueue ou cancelamento.
 			select {
 			case <-ctx.Done():
 				return
-			case <-q.wake:
+			case <-q.wake[robot]:
 			}
 			continue
 		}
@@ -48,31 +44,26 @@ func (q *Queue) Run(ctx context.Context) {
 	}
 }
 
-// process executa um comando com retries até obter ack ou esgotar tentativas.
+// process executa um lote com retries até obter o ack ou esgotar as tentativas.
 func (q *Queue) process(ctx context.Context, rec Record) {
-	q.transition(rec.ID, StateDispatched, "")
-
 	for {
-		status, detail, err := q.dispatch(ctx, rec)
+		q.transition(rec, StateDispatched, nil, "")
+
+		items, err := q.dispatch(ctx, rec)
 		if err == nil {
-			if status == ackStatusOK {
-				q.transition(rec.ID, StateAckedOK, detail)
-			} else {
-				if detail == "" {
-					detail = fmt.Sprintf("ack status %d", status)
-				}
-				q.transition(rec.ID, StateAckedError, detail)
-			}
+			state, detail := classify(items)
+			q.transition(rec, state, items, detail)
 			return
 		}
 		if ctx.Err() != nil {
-			return // shutdown: comando permanece DISPATCHED e será reconciliado no boot
+			return // shutdown: o lote fica em voo e será reconciliado no boot (Recover)
 		}
 
 		rec.Attempts++
-		q.log.Warn("dispatch failed", "id", rec.ID, "attempt", rec.Attempts, "err", err)
+		q.log.Warn("dispatch failed", "batch_id", rec.BatchID, "robot", rec.Robot,
+			"attempt", rec.Attempts, "err", err)
 		if rec.Attempts > q.cfg.MaxRetries {
-			q.transition(rec.ID, StateFailed, fmt.Sprintf("%v (após %d tentativas)", err, rec.Attempts))
+			q.transition(rec, StateFailed, nil, fmt.Sprintf("%v (após %d tentativas)", err, rec.Attempts))
 			return
 		}
 		q.persistAttempts(rec)
@@ -82,167 +73,271 @@ func (q *Queue) process(ctx context.Context, rec Record) {
 	}
 }
 
-// dispatch executa um ciclo de handshake de 4 vias com o CLP.
-func (q *Queue) dispatch(ctx context.Context, rec Record) (status int64, detail string, err error) {
-	code, ok := actionCode(rec.Action)
-	if !ok {
-		return 0, "", fmt.Errorf("action %q sem código", rec.Action)
+// dispatch executa um ciclo do handshake de lote (docs/mudancas-batch.md §4) e
+// devolve os itens com o status que o CLP gravou em cada um. Diferente do modelo
+// de comando único, há o sinal Start: o CLP avisa que travou o lote antes de
+// executá-lo, e só depois vem o Ack.
+func (q *Queue) dispatch(ctx context.Context, rec Record) ([]Item, error) {
+	robot := rec.Robot
+
+	// 1. Garante o slot do robô ocioso (Req=false, Start/Ack baixados).
+	if err := q.ensureIdle(ctx, robot); err != nil {
+		return nil, err
 	}
 
-	// 1. Garante slot ocioso (req=false e ack=false).
-	if err := q.ensureIdle(ctx); err != nil {
-		return 0, "", err
-	}
+	// 2. Escreve o lote e seus metadados — tudo ANTES do Req, que é o gatilho.
 
-	// 2. Escreve os campos do comando.
-	writes := []struct {
-		tag string
-		v   plc.TagValue
-	}{
-		{plc.TagCmdId, plc.TagValue{Kind: plc.KindDInt, DInt: rec.ID}},
-		{plc.TagCmdAction, plc.TagValue{Kind: plc.KindInt, Int: code}},
-		{plc.TagCmdMotherboard, plc.TagValue{Kind: plc.KindString, String: rec.Motherboard}},
-		{plc.TagCmdRobot, plc.TagValue{Kind: plc.KindInt, Int: rec.Robot}},
-		{plc.TagCmdFinger, plc.TagValue{Kind: plc.KindInt, Int: rec.Finger}},
-	}
-	for _, w := range writes {
-		if err := q.plc.WriteTag(ctx, w.tag, w.v); err != nil {
-			return 0, "", fmt.Errorf("write %s: %w", w.tag, err)
-		}
-	}
+	// Antes do encode: o lote em forma legível (o que a API decidiu enviar).
+	q.log.Info("batch → CLP (legível)",
+		"robot", robot,
+		"tag", plc.TagLote(robot),
+		"batch_id", rec.BatchID,
+		"acao", rec.Acao,
+		"qtd", rec.Qtd,
+		"items", describeItems(rec))
 
-	// 3. Sinaliza comando presente.
-	if err := q.writeBool(ctx, plc.TagCmdReq, true); err != nil {
-		return 0, "", err
-	}
-
-	// 4. Aguarda ack correlacionado pelo id, com timeout.
-	status, detail, err = q.waitAck(ctx, rec.ID)
+	data, err := plc.EncodeBatch(toBatchItems(rec))
 	if err != nil {
-		return 0, "", err
+		return nil, err
 	}
 
-	// 5. Confirma recebimento (req=false) e 6. aguarda CLP limpar o ack.
-	if err := q.writeBool(ctx, plc.TagCmdReq, false); err != nil {
-		return 0, "", err
+	// Depois do encode: o frame do array em hex, exatamente como o WriteStructRaw
+	// grava. É aqui que se confere o packing do UDT contra o Sysmac.
+	q.log.Info("batch → CLP (frame)",
+		"robot", robot,
+		"tag", plc.TagLote(robot),
+		"frame_len", len(data),
+		"frame_hex", fmt.Sprintf("%X", data))
+	if err := q.plc.WriteStructRaw(ctx, plc.TagLote(robot), data); err != nil {
+		return nil, fmt.Errorf("write %s: %w", plc.TagLote(robot), err)
 	}
-	q.waitAckClear(ctx) // best-effort; falha aqui não invalida o ack já lido
-	return status, detail, nil
+	if err := q.writeTag(ctx, plc.TagLoteQtd(robot), plc.TagValue{Kind: plc.KindInt, Int: rec.Qtd}); err != nil {
+		return nil, err
+	}
+	if err := q.writeTag(ctx, plc.TagLoteId(robot), plc.TagValue{Kind: plc.KindDInt, DInt: rec.BatchID}); err != nil {
+		return nil, err
+	}
+
+	// 3. Sinaliza lote pronto.
+	if err := q.writeBool(ctx, plc.TagLoteReq(robot), true); err != nil {
+		return nil, err
+	}
+
+	// 4. O CLP trava o lote e começa a executar.
+	if err := q.waitBool(ctx, plc.TagLoteStart(robot), true, q.cfg.StartTimeout); err != nil {
+		return nil, err
+	}
+	q.transition(rec, StateStarted, nil, "")
+
+	// 5. O CLP concluiu o lote (todos os .status gravados).
+	if err := q.waitBool(ctx, plc.TagLoteAck(robot), true, q.cfg.AckTimeout); err != nil {
+		return nil, err
+	}
+
+	// 6. Confere o eco do id e colhe o status de cada item.
+	items, err := q.readAck(ctx, rec)
+	if err != nil {
+		return nil, err
+	}
+
+	// 7. Confirma o recebimento e 8. espera o CLP liberar o slot. Uma falha aqui
+	// não invalida o ack já lido — o ensureIdle do próximo lote recobra o slot.
+	if err := q.writeBool(ctx, plc.TagLoteReq(robot), false); err != nil {
+		return nil, err
+	}
+	_ = q.waitIdle(ctx, robot)
+	return items, nil
 }
 
-// ensureIdle zera gCmd_Req e espera gCmd_Ack=false (CLP pronto para novo comando).
-func (q *Queue) ensureIdle(ctx context.Context) error {
-	if err := q.writeBool(ctx, plc.TagCmdReq, false); err != nil {
+// readAck confere o eco de gLote_Id_RoboN (correlação do ack) e lê
+// gLote_RoboN[i].status de cada item do lote.
+func (q *Queue) readAck(ctx context.Context, rec Record) ([]Item, error) {
+	ackID, err := q.readInt(ctx, plc.TagLoteId(rec.Robot))
+	if err != nil {
+		return nil, err
+	}
+	if ackID != rec.BatchID {
+		return nil, fmt.Errorf("eco de %s = %d, esperava %d",
+			plc.TagLoteId(rec.Robot), ackID, rec.BatchID)
+	}
+	items := append([]Item(nil), rec.Items...)
+	for i := range items {
+		st, err := q.readInt(ctx, plc.TagLoteItemStatus(rec.Robot, int(items[i].Position)))
+		if err != nil {
+			return nil, err
+		}
+		items[i].Status = int32(st)
+	}
+	return items, nil
+}
+
+// classify decide o estado final do lote pelo status que o CLP gravou nos itens:
+// ACKED_OK só se todos vieram OK.
+func classify(items []Item) (State, string) {
+	var bad []string
+	for _, it := range items {
+		if it.Status != plc.ItemStatusOK {
+			bad = append(bad, fmt.Sprintf("position %d (status=%d)", it.Position, it.Status))
+		}
+	}
+	if len(bad) == 0 {
+		return StateAckedOK, ""
+	}
+	return StateAckedError, "itens com falha: " + strings.Join(bad, ", ")
+}
+
+// toBatchItems posiciona os itens no array do CLP (índice 0 = gLote_RoboN[1]). As
+// posições não usadas ficam zeradas e todos os itens levam a ação do lote, que é
+// homogêneo. Validate já garantiu Position em 1..Qtd.
+func toBatchItems(rec Record) []plc.BatchItem {
+	out := make([]plc.BatchItem, plc.BatchSize)
+	for _, it := range rec.Items {
+		out[it.Position-1] = plc.BatchItem{
+			Acao:    rec.Acao,
+			Dedo:    it.Dedo,
+			Dedo2:   it.Dedo2,
+			Estande: it.Estande,
+			Bandeja: it.Bandeja,
+			Fileira: it.Fileira,
+			Coluna:  it.Coluna,
+			Rack:    it.Rack,
+			Placa:   it.Placa,
+			Slot:    it.Slot,
+		}
+	}
+	return out
+}
+
+// describeItems monta uma descrição legível dos itens do lote para o log,
+// mostrando só os campos que se aplicam à ação (bandeja x placa).
+func describeItems(rec Record) string {
+	var b strings.Builder
+	for i, it := range rec.Items {
+		if i > 0 {
+			b.WriteString(" | ")
+		}
+		fmt.Fprintf(&b, "pos%d dedo=%d", it.Position, it.Dedo)
+		if rec.Acao == 5 {
+			fmt.Fprintf(&b, " dedo2=%d", it.Dedo2)
+		}
+		switch rec.Acao {
+		case 1, 4: // ações de bandeja
+			fmt.Fprintf(&b, " estande=%d bandeja=%d fileira=%d coluna=%d",
+				it.Estande, it.Bandeja, it.Fileira, it.Coluna)
+		default: // ações de placa
+			fmt.Fprintf(&b, " rack=%d placa=%d slot=%d", it.Rack, it.Placa, it.Slot)
+		}
+	}
+	return b.String()
+}
+
+// ensureIdle zera gLote_Req_RoboN e espera o CLP baixar Start e Ack — o slot do
+// robô só aceita um lote novo depois disso.
+func (q *Queue) ensureIdle(ctx context.Context, robot int32) error {
+	if err := q.writeBool(ctx, plc.TagLoteReq(robot), false); err != nil {
 		return err
 	}
-	if !q.waitAckClear(ctx) {
-		return fmt.Errorf("CLP não liberou o slot (ack preso em TRUE): %w", errAckTimeout)
+	if err := q.waitIdle(ctx, robot); err != nil {
+		return fmt.Errorf("CLP não liberou o slot do robô %d: %w", robot, err)
 	}
 	return nil
 }
 
-// waitAck faz poll de gCmd_Ack até TRUE com gCmd_AckId == id, ou timeout.
-func (q *Queue) waitAck(ctx context.Context, id int64) (int64, string, error) {
-	deadline := time.Now().Add(q.cfg.AckTimeout)
+// waitIdle espera Start e Ack voltarem a FALSE (slot do robô livre).
+func (q *Queue) waitIdle(ctx context.Context, robot int32) error {
+	if err := q.waitBool(ctx, plc.TagLoteStart(robot), false, q.cfg.AckTimeout); err != nil {
+		return err
+	}
+	return q.waitBool(ctx, plc.TagLoteAck(robot), false, q.cfg.AckTimeout)
+}
+
+// waitBool faz poll de uma tag BOOL até ela valer want, ou estourar o timeout.
+func (q *Queue) waitBool(ctx context.Context, tag string, want bool, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	for {
-		ack, err := q.readBool(ctx, plc.TagCmdAck)
+		v, err := q.readBool(ctx, tag)
 		if err != nil {
-			return 0, "", err
+			return err
 		}
-		if ack {
-			ackID, err := q.readInt(ctx, plc.TagCmdAckId)
-			if err != nil {
-				return 0, "", err
-			}
-			if ackID == id {
-				status, err := q.readInt(ctx, plc.TagCmdAckStatus)
-				if err != nil {
-					return 0, "", err
-				}
-				detail, err := q.readString(ctx, plc.TagCmdAckDetail)
-				if err != nil {
-					return 0, "", err
-				}
-				return status, detail, nil
-			}
+		if v == want {
+			return nil
 		}
 		if time.Now().After(deadline) {
-			return 0, "", errAckTimeout
+			return fmt.Errorf("%s: esperava %v: %w", tag, want, errTimeout)
 		}
 		if !q.sleep(ctx, q.cfg.PollEvery) {
-			return 0, "", ctx.Err()
+			return ctx.Err()
 		}
 	}
 }
 
-// waitAckClear espera gCmd_Ack voltar a FALSE. Retorna false em timeout/cancelamento.
-func (q *Queue) waitAckClear(ctx context.Context) bool {
-	deadline := time.Now().Add(q.cfg.AckTimeout)
-	for {
-		ack, err := q.readBool(ctx, plc.TagCmdAck)
-		if err == nil && !ack {
-			return true
-		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return false
-		}
-		if !q.sleep(ctx, q.cfg.PollEvery) {
-			return false
-		}
-	}
-}
-
-// Recover reconcilia comandos deixados em DISPATCHED por um shutdown/crash.
-// Se o CLP ainda exibe o ack correspondente, finaliza a partir dele; caso
-// contrário re-enfileira (depende da idempotência do ladder por id).
+// Recover reconcilia lotes deixados em voo (DISPATCHED/STARTED) por um
+// shutdown/crash. Se o CLP ainda exibe o ack correspondente, finaliza a partir
+// dele; caso contrário re-enfileira (depende da idempotência do ladder por id).
 func (q *Queue) Recover(ctx context.Context) error {
-	pending, err := q.store.ListByState(StateDispatched)
-	if err != nil {
-		return err
-	}
-	for _, rec := range pending {
-		ack, err := q.readBool(ctx, plc.TagCmdAck)
-		if err == nil && ack {
-			if ackID, e := q.readInt(ctx, plc.TagCmdAckId); e == nil && ackID == rec.ID {
-				status, _ := q.readInt(ctx, plc.TagCmdAckStatus)
-				detail, _ := q.readString(ctx, plc.TagCmdAckDetail)
-				if status == ackStatusOK {
-					q.transition(rec.ID, StateAckedOK, detail)
-				} else {
-					q.transition(rec.ID, StateAckedError, detail)
-				}
-				_ = q.writeBool(ctx, plc.TagCmdReq, false)
+	for _, robot := range plc.Robots {
+		inflight, err := q.store.ListInFlight(robot)
+		if err != nil {
+			return err
+		}
+		for _, rec := range inflight {
+			if q.recoverFromAck(ctx, rec) {
 				continue
 			}
+			q.log.Warn("recover: re-enfileirando lote em voo", "batch_id", rec.BatchID, "robot", robot)
+			q.transition(rec, StateQueued, nil, "re-enfileirado após reinício")
 		}
-		q.log.Warn("recover: re-enfileirando comando em voo", "id", rec.ID)
-		q.transition(rec.ID, StateQueued, "re-enfileirado após reinício")
+		q.signal(robot)
 	}
-	q.signal()
 	return nil
+}
+
+// recoverFromAck finaliza o lote a partir do ack ainda presente no CLP, evitando
+// reexecutar o que já rodou. Retorna false se não há ack correspondente.
+func (q *Queue) recoverFromAck(ctx context.Context, rec Record) bool {
+	ack, err := q.readBool(ctx, plc.TagLoteAck(rec.Robot))
+	if err != nil || !ack {
+		return false
+	}
+	items, err := q.readAck(ctx, rec) // confere o eco do id antes de aceitar o ack
+	if err != nil {
+		return false
+	}
+	state, detail := classify(items)
+	q.transition(rec, state, items, detail)
+	_ = q.writeBool(ctx, plc.TagLoteReq(rec.Robot), false)
+	return true
 }
 
 // --- helpers ---
 
-func (q *Queue) transition(id int64, state State, detail string) {
-	rec, ok, err := q.store.Get(id)
+// transition persiste o novo estado do lote e publica a transição nos streams.
+// items != nil sobrescreve o status dos itens (o que o CLP gravou).
+func (q *Queue) transition(rec Record, state State, items []Item, detail string) {
+	cur, ok, err := q.store.Get(rec.Robot, rec.BatchID)
 	if err != nil || !ok {
-		q.log.Error("transition: registro não encontrado", "id", id, "err", err)
+		q.log.Error("transition: registro não encontrado",
+			"batch_id", rec.BatchID, "robot", rec.Robot, "err", err)
 		return
 	}
-	rec.State = state
-	rec.Detail = detail
-	if err := q.store.Update(rec); err != nil {
-		q.log.Error("transition: persist", "id", id, "state", state, "err", err)
+	cur.State = state
+	cur.Detail = detail
+	if items != nil {
+		cur.Items = items
+	}
+	if err := q.store.Update(cur); err != nil {
+		q.log.Error("transition: persist", "batch_id", rec.BatchID, "robot", rec.Robot,
+			"state", state, "err", err)
 		return
 	}
-	rec, _, _ = q.store.Get(id)
-	q.broker.publish(rec)
-	q.log.Info("command state", "id", id, "state", state, "detail", detail)
+	cur, _, _ = q.store.Get(rec.Robot, rec.BatchID)
+	q.broker.publish(cur)
+	q.log.Info("batch state", "batch_id", rec.BatchID, "robot", rec.Robot,
+		"state", state, "detail", detail)
 }
 
 func (q *Queue) persistAttempts(rec Record) {
-	cur, ok, err := q.store.Get(rec.ID)
+	cur, ok, err := q.store.Get(rec.Robot, rec.BatchID)
 	if err != nil || !ok {
 		return
 	}
@@ -270,11 +365,15 @@ func (q *Queue) sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func (q *Queue) writeBool(ctx context.Context, tag string, val bool) error {
-	if err := q.plc.WriteTag(ctx, tag, plc.TagValue{Kind: plc.KindBool, Bool: val}); err != nil {
+func (q *Queue) writeTag(ctx context.Context, tag string, v plc.TagValue) error {
+	if err := q.plc.WriteTag(ctx, tag, v); err != nil {
 		return fmt.Errorf("write %s: %w", tag, err)
 	}
 	return nil
+}
+
+func (q *Queue) writeBool(ctx context.Context, tag string, val bool) error {
+	return q.writeTag(ctx, tag, plc.TagValue{Kind: plc.KindBool, Bool: val})
 }
 
 func (q *Queue) readBool(ctx context.Context, tag string) (bool, error) {
@@ -291,14 +390,6 @@ func (q *Queue) readInt(ctx context.Context, tag string) (int64, error) {
 		return 0, fmt.Errorf("read %s: %w", tag, err)
 	}
 	return asInt64(v), nil
-}
-
-func (q *Queue) readString(ctx context.Context, tag string) (string, error) {
-	v, err := q.plc.ReadTag(ctx, tag)
-	if err != nil {
-		return "", fmt.Errorf("read %s: %w", tag, err)
-	}
-	return v.String, nil
 }
 
 // asInt64 extrai um inteiro de um TagValue independente do Kind (BOOL/INT/DINT).

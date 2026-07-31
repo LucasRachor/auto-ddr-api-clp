@@ -18,8 +18,8 @@ import (
 	"go_auto_ddr_clp/internal/queue"
 )
 
-// startServer sobe o PLCServer real (Mock + fila durável) sobre bufconn e
-// devolve um client gRPC conectado.
+// startServer sobe o PLCServer real (Mock + fila durável + um dispatcher por robô)
+// sobre bufconn e devolve um client gRPC conectado.
 func startServer(t *testing.T) pb.PLCServiceClient {
 	t.Helper()
 	store, err := queue.OpenStore(filepath.Join(t.TempDir(), "queue.db"))
@@ -34,7 +34,9 @@ func startServer(t *testing.T) pb.PLCServiceClient {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go q.Run(ctx)
+	for _, robot := range plc.Robots {
+		go q.Run(ctx, robot)
+	}
 
 	lis := bufconn.Listen(1 << 20)
 	gs := grpc.NewServer()
@@ -52,44 +54,95 @@ func startServer(t *testing.T) pb.PLCServiceClient {
 	return pb.NewPLCServiceClient(conn)
 }
 
-func TestEndToEnd_EnqueueAndStatusStream(t *testing.T) {
+func TestEndToEnd_EnqueueBatchAndStatusStream(t *testing.T) {
 	client := startServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Assina o stream de status antes de enfileirar.
-	stream, err := client.SubscribeCommandStatus(ctx, &pb.SubscribeCommandStatusRequest{})
+	stream, err := client.SubscribeBatchStatus(ctx, &pb.SubscribeBatchRequest{})
 	if err != nil {
-		t.Fatalf("SubscribeCommandStatus: %v", err)
+		t.Fatalf("SubscribeBatchStatus: %v", err)
 	}
 
-	resp, err := client.EnqueueCommand(ctx, &pb.EnqueueCommandRequest{
-		CommandId: 101, Action: "insert", Motherboard: "MB09", Robot: 1, Finger: 1,
+	resp, err := client.EnqueueBatch(ctx, &pb.EnqueueBatchRequest{
+		BatchId: 101, Robot: 1, Acao: 1, Qtd: 3,
+		Items: []*pb.TComandoMsg{
+			{Position: 1, Dedo: 1, Estande: 1, Bandeja: 1, Fileira: 1, Coluna: 1},
+			{Position: 2, Dedo: 2, Estande: 1, Bandeja: 1, Fileira: 1, Coluna: 2},
+			{Position: 3, Dedo: 3, Estande: 1, Bandeja: 1, Fileira: 1, Coluna: 3},
+		},
 	})
 	if err != nil {
-		t.Fatalf("EnqueueCommand: %v", err)
+		t.Fatalf("EnqueueBatch: %v", err)
 	}
 	if !resp.GetAccepted() {
-		t.Fatalf("comando recusado: %s", resp.GetMessage())
+		t.Fatalf("lote recusado: %s", resp.GetMessage())
 	}
 
-	// Espera a sequência terminar em ACKED_OK (Mock confirma o handshake).
-	var last pb.CommandState
+	// Espera a sequência terminar em ACKED_OK (o Mock confirma o handshake).
+	var last pb.BatchState
 	for {
 		upd, err := stream.Recv()
 		if err != nil {
 			t.Fatalf("stream.Recv: %v (último estado: %v)", err, last)
 		}
-		if upd.GetCommandId() != 101 {
+		if upd.GetBatchId() != 101 {
 			continue
 		}
 		last = upd.GetState()
-		if last == pb.CommandState_ACKED_OK {
+		switch last {
+		case pb.BatchState_BQ_ACKED_OK:
+			if n := len(upd.GetItems()); n != 3 {
+				t.Fatalf("items = %d, esperava 3", n)
+			}
+			for _, it := range upd.GetItems() {
+				if it.GetStatus() != plc.ItemStatusOK {
+					t.Fatalf("position %d: status = %d, esperava OK", it.GetPosition(), it.GetStatus())
+				}
+			}
+			if _, err := client.ConfirmBatchStatus(ctx, &pb.ConfirmBatchRequest{BatchId: 101, Robot: 1}); err != nil {
+				t.Fatalf("ConfirmBatchStatus: %v", err)
+			}
 			return
-		}
-		if last == pb.CommandState_ACKED_ERROR || last == pb.CommandState_FAILED {
+		case pb.BatchState_BQ_ACKED_ERROR, pb.BatchState_BQ_FAILED:
 			t.Fatalf("estado terminal inesperado: %v (%s)", last, upd.GetDetail())
 		}
+	}
+}
+
+// Um batch_id reusado é aceito (idempotência) mas NÃO é despachado; o flag
+// duplicate é o que deixa o Nest enxergar a colisão em vez de esperar para sempre
+// por um status que nunca virá.
+func TestEndToEnd_DuplicateBatchIdIsFlagged(t *testing.T) {
+	client := startServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req := &pb.EnqueueBatchRequest{
+		BatchId: 501, Robot: 1, Acao: 1, Qtd: 1,
+		Items: []*pb.TComandoMsg{{Position: 1, Dedo: 1, Estande: 1, Bandeja: 1, Fileira: 1, Coluna: 1}},
+	}
+	first, err := client.EnqueueBatch(ctx, req)
+	if err != nil {
+		t.Fatalf("EnqueueBatch 1: %v", err)
+	}
+	if !first.GetAccepted() || first.GetDuplicate() {
+		t.Fatalf("primeiro enqueue: accepted=%v duplicate=%v, esperava true/false",
+			first.GetAccepted(), first.GetDuplicate())
+	}
+
+	// Mesmo (robot, batch_id) com conteúdo diferente: colisão, não retry.
+	req.Items[0].Coluna = 9
+	second, err := client.EnqueueBatch(ctx, req)
+	if err != nil {
+		t.Fatalf("EnqueueBatch 2: %v", err)
+	}
+	if !second.GetAccepted() {
+		t.Fatalf("segundo enqueue recusado: %s", second.GetMessage())
+	}
+	if !second.GetDuplicate() {
+		t.Fatal("duplicate = false ao reusar (robot, batch_id), esperava true")
 	}
 }
 
@@ -98,13 +151,14 @@ func TestEndToEnd_RejectsInvalid(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	resp, err := client.EnqueueCommand(ctx, &pb.EnqueueCommandRequest{
-		CommandId: 1, Action: "insert", Motherboard: "MB09", Robot: 9, Finger: 1,
+	resp, err := client.EnqueueBatch(ctx, &pb.EnqueueBatchRequest{
+		BatchId: 1, Robot: 9, Acao: 1, Qtd: 1,
+		Items: []*pb.TComandoMsg{{Position: 1, Dedo: 1, Estande: 1, Bandeja: 1, Fileira: 1, Coluna: 1}},
 	})
 	if err != nil {
-		t.Fatalf("EnqueueCommand: %v", err)
+		t.Fatalf("EnqueueBatch: %v", err)
 	}
 	if resp.GetAccepted() {
-		t.Fatalf("esperava recusa por robot inválido")
+		t.Fatal("esperava recusa por robot inválido")
 	}
 }

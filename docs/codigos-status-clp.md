@@ -22,7 +22,7 @@ aparece nos logs dos comandos de diagnóstico, ex.:
 | Código | Nome (CIP) | Significado prático no NX1P2 |
 |--------|------------|------------------------------|
 | `0x00` | Success | **OK** — leitura/escrita concluída. |
-| `0x04` | Path Segment Error | Nome de tag mal formado no request path (ex.: sintaxe de `a.b.c` errada). |
+| `0x04` | Path Segment Error | Nome de tag mal formado no request path (ex.: sintaxe de `a.b.c` errada). **Se aparecer em TODA tag — inclusive num nome com typo e em tags que já liam antes, sem mudar código — a tabela de símbolos está vazia: nada publicado.** Causa típica: transferir um projeto novo sem marcar as variáveis com *Network Publish = Publish Only*. Fix é 100% lado-CLP: publicar + Rebuild + Transfer. |
 | `0x05` | Path Destination Unknown | **Tag não existe** ou não está com *Network Publish*. Confira o nome exato (maiúsc./minúsc.) e o publish no Sysmac. |
 | `0x06` | Partial Transfer | Resposta veio em partes (dado maior que um pacote). Normal em leituras grandes. |
 | `0x08` | Service Not Supported | O serviço não é suportado por esse objeto. É o que o NX1P2 devolve ao tentar **enumerar/browse** de tags (`GetInstanceAttributeList`) — por isso o acesso é sempre por nome. |
@@ -35,7 +35,7 @@ aparece nos logs dos comandos de diagnóstico, ex.:
 | `0x15` | Too Much Data | Bytes demais no request — payload maior que o esperado para o tipo. |
 | `0x1E` | Embedded Service Error | Erro num serviço embutido (ex.: dentro de um Multiple Service Packet). |
 | `0x1F` | Vendor Specific Error | **Erro específico da Omron.** O mais comum aqui é **descasamento de tipo/tamanho**: escrever um BOOL como 1 byte (o NX1P2 espera 2), ou escrever `int32` numa tag `INT`. Veja o `addStatus` para o detalhe. |
-| `0x20` | Invalid Parameter | Parâmetro inválido no serviço. |
+| `0x20` | Invalid Parameter | Parâmetro inválido no serviço. Aparece quando o **descritor de tipo** enviado não bate com o que o controlador espera: STRING com type code errado (`0xFCE` em vez de `0xD0`), ou **escrita de struct com `count>1`** — o NX1P2 exige `count=1` no write de UDT/array-de-UDT (ver [escrita-struct-clp.md](escrita-struct-clp.md)). |
 | `0x26` | Path Size Invalid | Tamanho do request path inconsistente. |
 | `0xFF` | General Error | Erro genérico; consulte sempre o `addStatus`. |
 

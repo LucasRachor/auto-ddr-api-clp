@@ -21,62 +21,61 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Estado de um comando ao longo do ciclo de vida na fila.
-type CommandState int32
+type BatchState int32
 
 const (
-	CommandState_COMMAND_STATE_UNSPECIFIED CommandState = 0
-	CommandState_QUEUED                    CommandState = 1 // persistido, aguardando despacho
-	CommandState_DISPATCHED                CommandState = 2 // escrito no CLP, aguardando ack
-	CommandState_ACKED_OK                  CommandState = 3 // CLP confirmou execução com sucesso
-	CommandState_ACKED_ERROR               CommandState = 4 // CLP confirmou com erro
-	CommandState_FAILED                    CommandState = 5 // sem ack após retries (dead-letter)
+	BatchState_BQ_QUEUED      BatchState = 0
+	BatchState_BQ_DISPATCHED  BatchState = 1
+	BatchState_BQ_STARTED     BatchState = 2
+	BatchState_BQ_ACKED_OK    BatchState = 3
+	BatchState_BQ_ACKED_ERROR BatchState = 4
+	BatchState_BQ_FAILED      BatchState = 5
 )
 
-// Enum value maps for CommandState.
+// Enum value maps for BatchState.
 var (
-	CommandState_name = map[int32]string{
-		0: "COMMAND_STATE_UNSPECIFIED",
-		1: "QUEUED",
-		2: "DISPATCHED",
-		3: "ACKED_OK",
-		4: "ACKED_ERROR",
-		5: "FAILED",
+	BatchState_name = map[int32]string{
+		0: "BQ_QUEUED",
+		1: "BQ_DISPATCHED",
+		2: "BQ_STARTED",
+		3: "BQ_ACKED_OK",
+		4: "BQ_ACKED_ERROR",
+		5: "BQ_FAILED",
 	}
-	CommandState_value = map[string]int32{
-		"COMMAND_STATE_UNSPECIFIED": 0,
-		"QUEUED":                    1,
-		"DISPATCHED":                2,
-		"ACKED_OK":                  3,
-		"ACKED_ERROR":               4,
-		"FAILED":                    5,
+	BatchState_value = map[string]int32{
+		"BQ_QUEUED":      0,
+		"BQ_DISPATCHED":  1,
+		"BQ_STARTED":     2,
+		"BQ_ACKED_OK":    3,
+		"BQ_ACKED_ERROR": 4,
+		"BQ_FAILED":      5,
 	}
 )
 
-func (x CommandState) Enum() *CommandState {
-	p := new(CommandState)
+func (x BatchState) Enum() *BatchState {
+	p := new(BatchState)
 	*p = x
 	return p
 }
 
-func (x CommandState) String() string {
+func (x BatchState) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (CommandState) Descriptor() protoreflect.EnumDescriptor {
+func (BatchState) Descriptor() protoreflect.EnumDescriptor {
 	return file_proto_plc_v1_plc_proto_enumTypes[0].Descriptor()
 }
 
-func (CommandState) Type() protoreflect.EnumType {
+func (BatchState) Type() protoreflect.EnumType {
 	return &file_proto_plc_v1_plc_proto_enumTypes[0]
 }
 
-func (x CommandState) Number() protoreflect.EnumNumber {
+func (x BatchState) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use CommandState.Descriptor instead.
-func (CommandState) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use BatchState.Descriptor instead.
+func (BatchState) EnumDescriptor() ([]byte, []int) {
 	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{0}
 }
 
@@ -806,33 +805,37 @@ func (x *TagUpdate) GetTsUnixMs() int64 {
 	return 0
 }
 
-// Comando enviado pelo backend Nest. O id é fornecido pelo Nest e precisa
-// caber em int32 (escrito como DINT no CLP) para correlação do ack.
-type EnqueueCommandRequest struct {
+// 1 item do lote (struct TComando). Campos não-aplicáveis = 0.
+type TComandoMsg struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	CommandId     int64                  `protobuf:"varint,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
-	Action        string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"` // "insert" (validado contra allowlist)
-	Motherboard   string                 `protobuf:"bytes,3,opt,name=motherboard,proto3" json:"motherboard,omitempty"`
-	Robot         int32                  `protobuf:"varint,4,opt,name=robot,proto3" json:"robot,omitempty"`   // 1..2
-	Finger        int32                  `protobuf:"varint,5,opt,name=finger,proto3" json:"finger,omitempty"` // 1..5
+	Position      int32                  `protobuf:"varint,1,opt,name=position,proto3" json:"position,omitempty"` // 1..5 (índice em gLote, base-1)
+	Dedo          int32                  `protobuf:"varint,2,opt,name=dedo,proto3" json:"dedo,omitempty"`
+	Dedo_2        int32                  `protobuf:"varint,3,opt,name=dedo_2,json=dedo2,proto3" json:"dedo_2,omitempty"`
+	Estande       int32                  `protobuf:"varint,4,opt,name=estande,proto3" json:"estande,omitempty"`
+	Bandeja       int32                  `protobuf:"varint,5,opt,name=bandeja,proto3" json:"bandeja,omitempty"`
+	Fileira       int32                  `protobuf:"varint,6,opt,name=fileira,proto3" json:"fileira,omitempty"`
+	Coluna        int32                  `protobuf:"varint,7,opt,name=coluna,proto3" json:"coluna,omitempty"`
+	Rack          int32                  `protobuf:"varint,8,opt,name=rack,proto3" json:"rack,omitempty"`
+	Placa         int32                  `protobuf:"varint,9,opt,name=placa,proto3" json:"placa,omitempty"`
+	Slot          int32                  `protobuf:"varint,10,opt,name=slot,proto3" json:"slot,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *EnqueueCommandRequest) Reset() {
-	*x = EnqueueCommandRequest{}
+func (x *TComandoMsg) Reset() {
+	*x = TComandoMsg{}
 	mi := &file_proto_plc_v1_plc_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *EnqueueCommandRequest) String() string {
+func (x *TComandoMsg) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*EnqueueCommandRequest) ProtoMessage() {}
+func (*TComandoMsg) ProtoMessage() {}
 
-func (x *EnqueueCommandRequest) ProtoReflect() protoreflect.Message {
+func (x *TComandoMsg) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_plc_v1_plc_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -844,70 +847,185 @@ func (x *EnqueueCommandRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use EnqueueCommandRequest.ProtoReflect.Descriptor instead.
-func (*EnqueueCommandRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use TComandoMsg.ProtoReflect.Descriptor instead.
+func (*TComandoMsg) Descriptor() ([]byte, []int) {
 	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{14}
 }
 
-func (x *EnqueueCommandRequest) GetCommandId() int64 {
+func (x *TComandoMsg) GetPosition() int32 {
 	if x != nil {
-		return x.CommandId
+		return x.Position
 	}
 	return 0
 }
 
-func (x *EnqueueCommandRequest) GetAction() string {
+func (x *TComandoMsg) GetDedo() int32 {
 	if x != nil {
-		return x.Action
+		return x.Dedo
 	}
-	return ""
+	return 0
 }
 
-func (x *EnqueueCommandRequest) GetMotherboard() string {
+func (x *TComandoMsg) GetDedo_2() int32 {
 	if x != nil {
-		return x.Motherboard
+		return x.Dedo_2
 	}
-	return ""
+	return 0
 }
 
-func (x *EnqueueCommandRequest) GetRobot() int32 {
+func (x *TComandoMsg) GetEstande() int32 {
+	if x != nil {
+		return x.Estande
+	}
+	return 0
+}
+
+func (x *TComandoMsg) GetBandeja() int32 {
+	if x != nil {
+		return x.Bandeja
+	}
+	return 0
+}
+
+func (x *TComandoMsg) GetFileira() int32 {
+	if x != nil {
+		return x.Fileira
+	}
+	return 0
+}
+
+func (x *TComandoMsg) GetColuna() int32 {
+	if x != nil {
+		return x.Coluna
+	}
+	return 0
+}
+
+func (x *TComandoMsg) GetRack() int32 {
+	if x != nil {
+		return x.Rack
+	}
+	return 0
+}
+
+func (x *TComandoMsg) GetPlaca() int32 {
+	if x != nil {
+		return x.Placa
+	}
+	return 0
+}
+
+func (x *TComandoMsg) GetSlot() int32 {
+	if x != nil {
+		return x.Slot
+	}
+	return 0
+}
+
+type EnqueueBatchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BatchId       int32                  `protobuf:"varint,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"` // gLote_Id (DINT), único por robô
+	Robot         int32                  `protobuf:"varint,2,opt,name=robot,proto3" json:"robot,omitempty"`                    // 1..2 -> _Robo1/_Robo2
+	Acao          int32                  `protobuf:"varint,3,opt,name=acao,proto3" json:"acao,omitempty"`                      // 1..5 (lote homogêneo)
+	Qtd           int32                  `protobuf:"varint,4,opt,name=qtd,proto3" json:"qtd,omitempty"`                        // gLote_Qtd (1..5)
+	Items         []*TComandoMsg         `protobuf:"bytes,5,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnqueueBatchRequest) Reset() {
+	*x = EnqueueBatchRequest{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnqueueBatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnqueueBatchRequest) ProtoMessage() {}
+
+func (x *EnqueueBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnqueueBatchRequest.ProtoReflect.Descriptor instead.
+func (*EnqueueBatchRequest) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *EnqueueBatchRequest) GetBatchId() int32 {
+	if x != nil {
+		return x.BatchId
+	}
+	return 0
+}
+
+func (x *EnqueueBatchRequest) GetRobot() int32 {
 	if x != nil {
 		return x.Robot
 	}
 	return 0
 }
 
-func (x *EnqueueCommandRequest) GetFinger() int32 {
+func (x *EnqueueBatchRequest) GetAcao() int32 {
 	if x != nil {
-		return x.Finger
+		return x.Acao
 	}
 	return 0
 }
 
-type EnqueueCommandResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	CommandId     int64                  `protobuf:"varint,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
-	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+func (x *EnqueueBatchRequest) GetQtd() int32 {
+	if x != nil {
+		return x.Qtd
+	}
+	return 0
+}
+
+func (x *EnqueueBatchRequest) GetItems() []*TComandoMsg {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+type EnqueueBatchResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Accepted bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	BatchId  int32                  `protobuf:"varint,2,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
+	Message  string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	// duplicate: já havia um lote com este (robot, batch_id). A fila é idempotente e
+	// devolve o registro antigo SEM despachar o novo; sem este campo o chamador não
+	// distingue isso de um enfileiramento real e o lote trava em silêncio.
+	Duplicate     bool `protobuf:"varint,4,opt,name=duplicate,proto3" json:"duplicate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *EnqueueCommandResponse) Reset() {
-	*x = EnqueueCommandResponse{}
-	mi := &file_proto_plc_v1_plc_proto_msgTypes[15]
+func (x *EnqueueBatchResponse) Reset() {
+	*x = EnqueueBatchResponse{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *EnqueueCommandResponse) String() string {
+func (x *EnqueueBatchResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*EnqueueCommandResponse) ProtoMessage() {}
+func (*EnqueueBatchResponse) ProtoMessage() {}
 
-func (x *EnqueueCommandResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_plc_v1_plc_proto_msgTypes[15]
+func (x *EnqueueBatchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -918,57 +1036,62 @@ func (x *EnqueueCommandResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use EnqueueCommandResponse.ProtoReflect.Descriptor instead.
-func (*EnqueueCommandResponse) Descriptor() ([]byte, []int) {
-	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{15}
+// Deprecated: Use EnqueueBatchResponse.ProtoReflect.Descriptor instead.
+func (*EnqueueBatchResponse) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{16}
 }
 
-func (x *EnqueueCommandResponse) GetAccepted() bool {
+func (x *EnqueueBatchResponse) GetAccepted() bool {
 	if x != nil {
 		return x.Accepted
 	}
 	return false
 }
 
-func (x *EnqueueCommandResponse) GetCommandId() int64 {
+func (x *EnqueueBatchResponse) GetBatchId() int32 {
 	if x != nil {
-		return x.CommandId
+		return x.BatchId
 	}
 	return 0
 }
 
-func (x *EnqueueCommandResponse) GetMessage() string {
+func (x *EnqueueBatchResponse) GetMessage() string {
 	if x != nil {
 		return x.Message
 	}
 	return ""
 }
 
-type CommandStatusUpdate struct {
+func (x *EnqueueBatchResponse) GetDuplicate() bool {
+	if x != nil {
+		return x.Duplicate
+	}
+	return false
+}
+
+type ItemStatusMsg struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	CommandId     int64                  `protobuf:"varint,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
-	State         CommandState           `protobuf:"varint,2,opt,name=state,proto3,enum=plc.CommandState" json:"state,omitempty"`
-	Detail        string                 `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
-	TsUnixMs      int64                  `protobuf:"varint,4,opt,name=ts_unix_ms,json=tsUnixMs,proto3" json:"ts_unix_ms,omitempty"`
+	Position      int32                  `protobuf:"varint,1,opt,name=position,proto3" json:"position,omitempty"`
+	Status        int32                  `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"` // 0=pendente, 1=ok, 2=erro
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CommandStatusUpdate) Reset() {
-	*x = CommandStatusUpdate{}
-	mi := &file_proto_plc_v1_plc_proto_msgTypes[16]
+func (x *ItemStatusMsg) Reset() {
+	*x = ItemStatusMsg{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CommandStatusUpdate) String() string {
+func (x *ItemStatusMsg) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CommandStatusUpdate) ProtoMessage() {}
+func (*ItemStatusMsg) ProtoMessage() {}
 
-func (x *CommandStatusUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_plc_v1_plc_proto_msgTypes[16]
+func (x *ItemStatusMsg) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -979,60 +1102,130 @@ func (x *CommandStatusUpdate) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CommandStatusUpdate.ProtoReflect.Descriptor instead.
-func (*CommandStatusUpdate) Descriptor() ([]byte, []int) {
-	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{16}
+// Deprecated: Use ItemStatusMsg.ProtoReflect.Descriptor instead.
+func (*ItemStatusMsg) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{17}
 }
 
-func (x *CommandStatusUpdate) GetCommandId() int64 {
+func (x *ItemStatusMsg) GetPosition() int32 {
 	if x != nil {
-		return x.CommandId
+		return x.Position
 	}
 	return 0
 }
 
-func (x *CommandStatusUpdate) GetState() CommandState {
+func (x *ItemStatusMsg) GetStatus() int32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+type BatchStatusUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BatchId       int32                  `protobuf:"varint,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
+	Robot         int32                  `protobuf:"varint,2,opt,name=robot,proto3" json:"robot,omitempty"`
+	State         BatchState             `protobuf:"varint,3,opt,name=state,proto3,enum=plc.BatchState" json:"state,omitempty"`
+	Items         []*ItemStatusMsg       `protobuf:"bytes,4,rep,name=items,proto3" json:"items,omitempty"`
+	Detail        string                 `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`
+	TsUnixMs      int64                  `protobuf:"varint,6,opt,name=ts_unix_ms,json=tsUnixMs,proto3" json:"ts_unix_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchStatusUpdate) Reset() {
+	*x = BatchStatusUpdate{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchStatusUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchStatusUpdate) ProtoMessage() {}
+
+func (x *BatchStatusUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchStatusUpdate.ProtoReflect.Descriptor instead.
+func (*BatchStatusUpdate) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *BatchStatusUpdate) GetBatchId() int32 {
+	if x != nil {
+		return x.BatchId
+	}
+	return 0
+}
+
+func (x *BatchStatusUpdate) GetRobot() int32 {
+	if x != nil {
+		return x.Robot
+	}
+	return 0
+}
+
+func (x *BatchStatusUpdate) GetState() BatchState {
 	if x != nil {
 		return x.State
 	}
-	return CommandState_COMMAND_STATE_UNSPECIFIED
+	return BatchState_BQ_QUEUED
 }
 
-func (x *CommandStatusUpdate) GetDetail() string {
+func (x *BatchStatusUpdate) GetItems() []*ItemStatusMsg {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *BatchStatusUpdate) GetDetail() string {
 	if x != nil {
 		return x.Detail
 	}
 	return ""
 }
 
-func (x *CommandStatusUpdate) GetTsUnixMs() int64 {
+func (x *BatchStatusUpdate) GetTsUnixMs() int64 {
 	if x != nil {
 		return x.TsUnixMs
 	}
 	return 0
 }
 
-type SubscribeCommandStatusRequest struct {
+type SubscribeBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SubscribeCommandStatusRequest) Reset() {
-	*x = SubscribeCommandStatusRequest{}
-	mi := &file_proto_plc_v1_plc_proto_msgTypes[17]
+func (x *SubscribeBatchRequest) Reset() {
+	*x = SubscribeBatchRequest{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SubscribeCommandStatusRequest) String() string {
+func (x *SubscribeBatchRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SubscribeCommandStatusRequest) ProtoMessage() {}
+func (*SubscribeBatchRequest) ProtoMessage() {}
 
-func (x *SubscribeCommandStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_plc_v1_plc_proto_msgTypes[17]
+func (x *SubscribeBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1043,33 +1236,34 @@ func (x *SubscribeCommandStatusRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SubscribeCommandStatusRequest.ProtoReflect.Descriptor instead.
-func (*SubscribeCommandStatusRequest) Descriptor() ([]byte, []int) {
-	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{17}
+// Deprecated: Use SubscribeBatchRequest.ProtoReflect.Descriptor instead.
+func (*SubscribeBatchRequest) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{19}
 }
 
-type ConfirmStatusRequest struct {
+type ConfirmBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	CommandId     int64                  `protobuf:"varint,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	BatchId       int32                  `protobuf:"varint,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
+	Robot         int32                  `protobuf:"varint,2,opt,name=robot,proto3" json:"robot,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ConfirmStatusRequest) Reset() {
-	*x = ConfirmStatusRequest{}
-	mi := &file_proto_plc_v1_plc_proto_msgTypes[18]
+func (x *ConfirmBatchRequest) Reset() {
+	*x = ConfirmBatchRequest{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ConfirmStatusRequest) String() string {
+func (x *ConfirmBatchRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ConfirmStatusRequest) ProtoMessage() {}
+func (*ConfirmBatchRequest) ProtoMessage() {}
 
-func (x *ConfirmStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_plc_v1_plc_proto_msgTypes[18]
+func (x *ConfirmBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1080,14 +1274,21 @@ func (x *ConfirmStatusRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ConfirmStatusRequest.ProtoReflect.Descriptor instead.
-func (*ConfirmStatusRequest) Descriptor() ([]byte, []int) {
-	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{18}
+// Deprecated: Use ConfirmBatchRequest.ProtoReflect.Descriptor instead.
+func (*ConfirmBatchRequest) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{20}
 }
 
-func (x *ConfirmStatusRequest) GetCommandId() int64 {
+func (x *ConfirmBatchRequest) GetBatchId() int32 {
 	if x != nil {
-		return x.CommandId
+		return x.BatchId
+	}
+	return 0
+}
+
+func (x *ConfirmBatchRequest) GetRobot() int32 {
+	if x != nil {
+		return x.Robot
 	}
 	return 0
 }
@@ -1134,40 +1335,54 @@ const file_proto_plc_v1_plc_proto_rawDesc = "" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12#\n" +
 	"\x05value\x18\x02 \x01(\v2\r.plc.TagValueR\x05value\x12\x1c\n" +
 	"\n" +
-	"ts_unix_ms\x18\x03 \x01(\x03R\btsUnixMs\"\x9e\x01\n" +
-	"\x15EnqueueCommandRequest\x12\x1d\n" +
+	"ts_unix_ms\x18\x03 \x01(\x03R\btsUnixMs\"\xf8\x01\n" +
+	"\vTComandoMsg\x12\x1a\n" +
+	"\bposition\x18\x01 \x01(\x05R\bposition\x12\x12\n" +
+	"\x04dedo\x18\x02 \x01(\x05R\x04dedo\x12\x15\n" +
+	"\x06dedo_2\x18\x03 \x01(\x05R\x05dedo2\x12\x18\n" +
+	"\aestande\x18\x04 \x01(\x05R\aestande\x12\x18\n" +
+	"\abandeja\x18\x05 \x01(\x05R\abandeja\x12\x18\n" +
+	"\afileira\x18\x06 \x01(\x05R\afileira\x12\x16\n" +
+	"\x06coluna\x18\a \x01(\x05R\x06coluna\x12\x12\n" +
+	"\x04rack\x18\b \x01(\x05R\x04rack\x12\x14\n" +
+	"\x05placa\x18\t \x01(\x05R\x05placa\x12\x12\n" +
+	"\x04slot\x18\n" +
+	" \x01(\x05R\x04slot\"\x94\x01\n" +
+	"\x13EnqueueBatchRequest\x12\x19\n" +
+	"\bbatch_id\x18\x01 \x01(\x05R\abatchId\x12\x14\n" +
+	"\x05robot\x18\x02 \x01(\x05R\x05robot\x12\x12\n" +
+	"\x04acao\x18\x03 \x01(\x05R\x04acao\x12\x10\n" +
+	"\x03qtd\x18\x04 \x01(\x05R\x03qtd\x12&\n" +
+	"\x05items\x18\x05 \x03(\v2\x10.plc.TComandoMsgR\x05items\"\x85\x01\n" +
+	"\x14EnqueueBatchResponse\x12\x1a\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x19\n" +
+	"\bbatch_id\x18\x02 \x01(\x05R\abatchId\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\x12\x1c\n" +
+	"\tduplicate\x18\x04 \x01(\bR\tduplicate\"C\n" +
+	"\rItemStatusMsg\x12\x1a\n" +
+	"\bposition\x18\x01 \x01(\x05R\bposition\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\x05R\x06status\"\xcb\x01\n" +
+	"\x11BatchStatusUpdate\x12\x19\n" +
+	"\bbatch_id\x18\x01 \x01(\x05R\abatchId\x12\x14\n" +
+	"\x05robot\x18\x02 \x01(\x05R\x05robot\x12%\n" +
+	"\x05state\x18\x03 \x01(\x0e2\x0f.plc.BatchStateR\x05state\x12(\n" +
+	"\x05items\x18\x04 \x03(\v2\x12.plc.ItemStatusMsgR\x05items\x12\x16\n" +
+	"\x06detail\x18\x05 \x01(\tR\x06detail\x12\x1c\n" +
 	"\n" +
-	"command_id\x18\x01 \x01(\x03R\tcommandId\x12\x16\n" +
-	"\x06action\x18\x02 \x01(\tR\x06action\x12 \n" +
-	"\vmotherboard\x18\x03 \x01(\tR\vmotherboard\x12\x14\n" +
-	"\x05robot\x18\x04 \x01(\x05R\x05robot\x12\x16\n" +
-	"\x06finger\x18\x05 \x01(\x05R\x06finger\"m\n" +
-	"\x16EnqueueCommandResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x1d\n" +
+	"ts_unix_ms\x18\x06 \x01(\x03R\btsUnixMs\"\x17\n" +
+	"\x15SubscribeBatchRequest\"F\n" +
+	"\x13ConfirmBatchRequest\x12\x19\n" +
+	"\bbatch_id\x18\x01 \x01(\x05R\abatchId\x12\x14\n" +
+	"\x05robot\x18\x02 \x01(\x05R\x05robot*r\n" +
 	"\n" +
-	"command_id\x18\x02 \x01(\x03R\tcommandId\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"\x93\x01\n" +
-	"\x13CommandStatusUpdate\x12\x1d\n" +
+	"BatchState\x12\r\n" +
+	"\tBQ_QUEUED\x10\x00\x12\x11\n" +
+	"\rBQ_DISPATCHED\x10\x01\x12\x0e\n" +
 	"\n" +
-	"command_id\x18\x01 \x01(\x03R\tcommandId\x12'\n" +
-	"\x05state\x18\x02 \x01(\x0e2\x11.plc.CommandStateR\x05state\x12\x16\n" +
-	"\x06detail\x18\x03 \x01(\tR\x06detail\x12\x1c\n" +
-	"\n" +
-	"ts_unix_ms\x18\x04 \x01(\x03R\btsUnixMs\"\x1f\n" +
-	"\x1dSubscribeCommandStatusRequest\"5\n" +
-	"\x14ConfirmStatusRequest\x12\x1d\n" +
-	"\n" +
-	"command_id\x18\x01 \x01(\x03R\tcommandId*t\n" +
-	"\fCommandState\x12\x1d\n" +
-	"\x19COMMAND_STATE_UNSPECIFIED\x10\x00\x12\n" +
-	"\n" +
-	"\x06QUEUED\x10\x01\x12\x0e\n" +
-	"\n" +
-	"DISPATCHED\x10\x02\x12\f\n" +
-	"\bACKED_OK\x10\x03\x12\x0f\n" +
-	"\vACKED_ERROR\x10\x04\x12\n" +
-	"\n" +
-	"\x06FAILED\x10\x052\xae\x05\n" +
+	"BQ_STARTED\x10\x02\x12\x0f\n" +
+	"\vBQ_ACKED_OK\x10\x03\x12\x12\n" +
+	"\x0eBQ_ACKED_ERROR\x10\x04\x12\r\n" +
+	"\tBQ_FAILED\x10\x052\xa0\x05\n" +
 	"\n" +
 	"PLCService\x120\n" +
 	"\x05Start\x12\x11.plc.StartRequest\x1a\x14.plc.CommandResponse\x12.\n" +
@@ -1177,10 +1392,10 @@ const file_proto_plc_v1_plc_proto_rawDesc = "" +
 	"\bWriteTag\x12\x14.plc.WriteTagRequest\x1a\x14.plc.CommandResponse\x127\n" +
 	"\tGetStatus\x12\x15.plc.GetStatusRequest\x1a\x13.plc.StatusResponse\x12@\n" +
 	"\vHealthcheck\x12\x17.plc.HealthcheckRequest\x1a\x18.plc.HealthcheckResponse\x12<\n" +
-	"\rSubscribeTags\x12\x19.plc.SubscribeTagsRequest\x1a\x0e.plc.TagUpdate0\x01\x12I\n" +
-	"\x0eEnqueueCommand\x12\x1a.plc.EnqueueCommandRequest\x1a\x1b.plc.EnqueueCommandResponse\x12X\n" +
-	"\x16SubscribeCommandStatus\x12\".plc.SubscribeCommandStatusRequest\x1a\x18.plc.CommandStatusUpdate0\x01\x12@\n" +
-	"\rConfirmStatus\x12\x19.plc.ConfirmStatusRequest\x1a\x14.plc.CommandResponseB\"Z go_auto_ddr_clp/gen/plc/v1;plcv1b\x06proto3"
+	"\rSubscribeTags\x12\x19.plc.SubscribeTagsRequest\x1a\x0e.plc.TagUpdate0\x01\x12C\n" +
+	"\fEnqueueBatch\x12\x18.plc.EnqueueBatchRequest\x1a\x19.plc.EnqueueBatchResponse\x12L\n" +
+	"\x14SubscribeBatchStatus\x12\x1a.plc.SubscribeBatchRequest\x1a\x16.plc.BatchStatusUpdate0\x01\x12D\n" +
+	"\x12ConfirmBatchStatus\x12\x18.plc.ConfirmBatchRequest\x1a\x14.plc.CommandResponseB\"Z go_auto_ddr_clp/gen/plc/v1;plcv1b\x06proto3"
 
 var (
 	file_proto_plc_v1_plc_proto_rawDescOnce sync.Once
@@ -1195,61 +1410,65 @@ func file_proto_plc_v1_plc_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_plc_v1_plc_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_plc_v1_plc_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_proto_plc_v1_plc_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_proto_plc_v1_plc_proto_goTypes = []any{
-	(CommandState)(0),                     // 0: plc.CommandState
-	(*StartRequest)(nil),                  // 1: plc.StartRequest
-	(*StopRequest)(nil),                   // 2: plc.StopRequest
-	(*ResetRequest)(nil),                  // 3: plc.ResetRequest
-	(*CommandResponse)(nil),               // 4: plc.CommandResponse
-	(*TagValue)(nil),                      // 5: plc.TagValue
-	(*ReadTagRequest)(nil),                // 6: plc.ReadTagRequest
-	(*ReadTagResponse)(nil),               // 7: plc.ReadTagResponse
-	(*WriteTagRequest)(nil),               // 8: plc.WriteTagRequest
-	(*GetStatusRequest)(nil),              // 9: plc.GetStatusRequest
-	(*StatusResponse)(nil),                // 10: plc.StatusResponse
-	(*HealthcheckRequest)(nil),            // 11: plc.HealthcheckRequest
-	(*HealthcheckResponse)(nil),           // 12: plc.HealthcheckResponse
-	(*SubscribeTagsRequest)(nil),          // 13: plc.SubscribeTagsRequest
-	(*TagUpdate)(nil),                     // 14: plc.TagUpdate
-	(*EnqueueCommandRequest)(nil),         // 15: plc.EnqueueCommandRequest
-	(*EnqueueCommandResponse)(nil),        // 16: plc.EnqueueCommandResponse
-	(*CommandStatusUpdate)(nil),           // 17: plc.CommandStatusUpdate
-	(*SubscribeCommandStatusRequest)(nil), // 18: plc.SubscribeCommandStatusRequest
-	(*ConfirmStatusRequest)(nil),          // 19: plc.ConfirmStatusRequest
+	(BatchState)(0),               // 0: plc.BatchState
+	(*StartRequest)(nil),          // 1: plc.StartRequest
+	(*StopRequest)(nil),           // 2: plc.StopRequest
+	(*ResetRequest)(nil),          // 3: plc.ResetRequest
+	(*CommandResponse)(nil),       // 4: plc.CommandResponse
+	(*TagValue)(nil),              // 5: plc.TagValue
+	(*ReadTagRequest)(nil),        // 6: plc.ReadTagRequest
+	(*ReadTagResponse)(nil),       // 7: plc.ReadTagResponse
+	(*WriteTagRequest)(nil),       // 8: plc.WriteTagRequest
+	(*GetStatusRequest)(nil),      // 9: plc.GetStatusRequest
+	(*StatusResponse)(nil),        // 10: plc.StatusResponse
+	(*HealthcheckRequest)(nil),    // 11: plc.HealthcheckRequest
+	(*HealthcheckResponse)(nil),   // 12: plc.HealthcheckResponse
+	(*SubscribeTagsRequest)(nil),  // 13: plc.SubscribeTagsRequest
+	(*TagUpdate)(nil),             // 14: plc.TagUpdate
+	(*TComandoMsg)(nil),           // 15: plc.TComandoMsg
+	(*EnqueueBatchRequest)(nil),   // 16: plc.EnqueueBatchRequest
+	(*EnqueueBatchResponse)(nil),  // 17: plc.EnqueueBatchResponse
+	(*ItemStatusMsg)(nil),         // 18: plc.ItemStatusMsg
+	(*BatchStatusUpdate)(nil),     // 19: plc.BatchStatusUpdate
+	(*SubscribeBatchRequest)(nil), // 20: plc.SubscribeBatchRequest
+	(*ConfirmBatchRequest)(nil),   // 21: plc.ConfirmBatchRequest
 }
 var file_proto_plc_v1_plc_proto_depIdxs = []int32{
 	5,  // 0: plc.ReadTagResponse.value:type_name -> plc.TagValue
 	5,  // 1: plc.WriteTagRequest.value:type_name -> plc.TagValue
 	5,  // 2: plc.TagUpdate.value:type_name -> plc.TagValue
-	0,  // 3: plc.CommandStatusUpdate.state:type_name -> plc.CommandState
-	1,  // 4: plc.PLCService.Start:input_type -> plc.StartRequest
-	2,  // 5: plc.PLCService.Stop:input_type -> plc.StopRequest
-	3,  // 6: plc.PLCService.Reset:input_type -> plc.ResetRequest
-	6,  // 7: plc.PLCService.ReadTag:input_type -> plc.ReadTagRequest
-	8,  // 8: plc.PLCService.WriteTag:input_type -> plc.WriteTagRequest
-	9,  // 9: plc.PLCService.GetStatus:input_type -> plc.GetStatusRequest
-	11, // 10: plc.PLCService.Healthcheck:input_type -> plc.HealthcheckRequest
-	13, // 11: plc.PLCService.SubscribeTags:input_type -> plc.SubscribeTagsRequest
-	15, // 12: plc.PLCService.EnqueueCommand:input_type -> plc.EnqueueCommandRequest
-	18, // 13: plc.PLCService.SubscribeCommandStatus:input_type -> plc.SubscribeCommandStatusRequest
-	19, // 14: plc.PLCService.ConfirmStatus:input_type -> plc.ConfirmStatusRequest
-	4,  // 15: plc.PLCService.Start:output_type -> plc.CommandResponse
-	4,  // 16: plc.PLCService.Stop:output_type -> plc.CommandResponse
-	4,  // 17: plc.PLCService.Reset:output_type -> plc.CommandResponse
-	7,  // 18: plc.PLCService.ReadTag:output_type -> plc.ReadTagResponse
-	4,  // 19: plc.PLCService.WriteTag:output_type -> plc.CommandResponse
-	10, // 20: plc.PLCService.GetStatus:output_type -> plc.StatusResponse
-	12, // 21: plc.PLCService.Healthcheck:output_type -> plc.HealthcheckResponse
-	14, // 22: plc.PLCService.SubscribeTags:output_type -> plc.TagUpdate
-	16, // 23: plc.PLCService.EnqueueCommand:output_type -> plc.EnqueueCommandResponse
-	17, // 24: plc.PLCService.SubscribeCommandStatus:output_type -> plc.CommandStatusUpdate
-	4,  // 25: plc.PLCService.ConfirmStatus:output_type -> plc.CommandResponse
-	15, // [15:26] is the sub-list for method output_type
-	4,  // [4:15] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	15, // 3: plc.EnqueueBatchRequest.items:type_name -> plc.TComandoMsg
+	0,  // 4: plc.BatchStatusUpdate.state:type_name -> plc.BatchState
+	18, // 5: plc.BatchStatusUpdate.items:type_name -> plc.ItemStatusMsg
+	1,  // 6: plc.PLCService.Start:input_type -> plc.StartRequest
+	2,  // 7: plc.PLCService.Stop:input_type -> plc.StopRequest
+	3,  // 8: plc.PLCService.Reset:input_type -> plc.ResetRequest
+	6,  // 9: plc.PLCService.ReadTag:input_type -> plc.ReadTagRequest
+	8,  // 10: plc.PLCService.WriteTag:input_type -> plc.WriteTagRequest
+	9,  // 11: plc.PLCService.GetStatus:input_type -> plc.GetStatusRequest
+	11, // 12: plc.PLCService.Healthcheck:input_type -> plc.HealthcheckRequest
+	13, // 13: plc.PLCService.SubscribeTags:input_type -> plc.SubscribeTagsRequest
+	16, // 14: plc.PLCService.EnqueueBatch:input_type -> plc.EnqueueBatchRequest
+	20, // 15: plc.PLCService.SubscribeBatchStatus:input_type -> plc.SubscribeBatchRequest
+	21, // 16: plc.PLCService.ConfirmBatchStatus:input_type -> plc.ConfirmBatchRequest
+	4,  // 17: plc.PLCService.Start:output_type -> plc.CommandResponse
+	4,  // 18: plc.PLCService.Stop:output_type -> plc.CommandResponse
+	4,  // 19: plc.PLCService.Reset:output_type -> plc.CommandResponse
+	7,  // 20: plc.PLCService.ReadTag:output_type -> plc.ReadTagResponse
+	4,  // 21: plc.PLCService.WriteTag:output_type -> plc.CommandResponse
+	10, // 22: plc.PLCService.GetStatus:output_type -> plc.StatusResponse
+	12, // 23: plc.PLCService.Healthcheck:output_type -> plc.HealthcheckResponse
+	14, // 24: plc.PLCService.SubscribeTags:output_type -> plc.TagUpdate
+	17, // 25: plc.PLCService.EnqueueBatch:output_type -> plc.EnqueueBatchResponse
+	19, // 26: plc.PLCService.SubscribeBatchStatus:output_type -> plc.BatchStatusUpdate
+	4,  // 27: plc.PLCService.ConfirmBatchStatus:output_type -> plc.CommandResponse
+	17, // [17:28] is the sub-list for method output_type
+	6,  // [6:17] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_proto_plc_v1_plc_proto_init() }
@@ -1270,7 +1489,7 @@ func file_proto_plc_v1_plc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_plc_v1_plc_proto_rawDesc), len(file_proto_plc_v1_plc_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   19,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

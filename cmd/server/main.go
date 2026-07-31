@@ -29,17 +29,25 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	clp := plc.NewOmronNX1P2(cfg.CLPHost, cfg.CLPPort)
+	var clp plc.Client
+	if cfg.Mock {
+		clp = plc.NewMock()
+		log.Warn("CLP_MOCK=1: CLP simulado em memória (sem hardware)")
+	} else {
+		clp = plc.NewOmronNX1P2(cfg.CLPHost, cfg.CLPPort)
+	}
 	if err := clp.Connect(ctx); err != nil {
 		log.Error("plc connect", "host", cfg.CLPHost, "port", cfg.CLPPort, "err", err)
 		os.Exit(1)
 	}
-	log.Info("plc connected", "host", cfg.CLPHost, "port", cfg.CLPPort)
+	if !cfg.Mock {
+		log.Info("plc connected", "host", cfg.CLPHost, "port", cfg.CLPPort)
+	}
 	defer clp.Close()
 
 	// Mantém a sessão EtherNet-IP aquecida: o NX1P2 derruba conexões CIP ociosas,
 	// então uma leitura leve periódica evita o reset e reconecta proativamente.
-	go clp.KeepAlive(ctx, 15*time.Second, log)
+	// go clp.KeepAlive(ctx, 15*time.Second, log)
 
 	// srv := server.New(clp, log)
 	// _ = srv
@@ -57,7 +65,8 @@ func main() {
 	// 	}
 	// }
 
-	// Fila durável de comandos (bbolt) + dispatcher serial com handshake/ack.
+	// Fila durável de lotes (bbolt) + um dispatcher por robô, cada um serializando
+	// o handshake do seu slot gLote_*_RoboN.
 	if dir := filepath.Dir(cfg.QueueDBPath); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			log.Error("queue db dir", "path", dir, "err", err)
@@ -72,14 +81,17 @@ func main() {
 	defer store.Close()
 
 	q := queue.New(store, clp, log, queue.Config{
-		AckTimeout: time.Duration(cfg.AckTimeoutMS) * time.Millisecond,
-		MaxRetries: cfg.MaxRetries,
-		PollEvery:  time.Duration(cfg.CmdPollMS) * time.Millisecond,
+		AckTimeout:   time.Duration(cfg.AckTimeoutMS) * time.Millisecond,
+		StartTimeout: time.Duration(cfg.StartTimeoutMS) * time.Millisecond,
+		MaxRetries:   cfg.MaxRetries,
+		PollEvery:    time.Duration(cfg.CmdPollMS) * time.Millisecond,
 	})
 	if err := q.Recover(ctx); err != nil {
 		log.Error("queue recover", "err", err)
 	}
-	go q.Run(ctx)
+	for _, robot := range plc.Robots {
+		go q.Run(ctx, robot)
+	}
 
 	srv := server.New(clp, q, log)
 

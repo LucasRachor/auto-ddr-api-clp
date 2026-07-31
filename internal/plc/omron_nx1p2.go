@@ -34,24 +34,9 @@ const (
 	TagSysFault   = "gSys_FaultDetail"
 )
 
-// Tags do handshake de comando (fila com ack). Slot único: um comando em
-// execução por vez. Veja internal/queue/dispatcher.go para a sequência.
-//
-// Requisição (API -> CLP):
-const (
-	TagCmdId          = "gCmd_Id"          // DINT  — id do comando (vindo do Nest)
-	TagCmdAction      = "gCmd_Action"      // INT   — código da ação (insert=1)
-	TagCmdMotherboard = "gCmd_Motherboard" // STRING
-	TagCmdRobot       = "gCmd_Robot"       // INT   — 1..2
-	TagCmdFinger      = "gCmd_Finger"      // INT   — 1..5
-	TagCmdReq         = "gCmd_Req"         // BOOL  — TRUE = comando válido presente
-
-	// Resposta (CLP -> API):
-	TagCmdAckId     = "gCmd_AckId"     // DINT  — eco do id processado
-	TagCmdAckStatus = "gCmd_AckStatus" // INT   — 0=none, 1=OK, 2=erro
-	TagCmdAckDetail = "gCmd_AckDetail" // STRING — detalhe/erro (opcional)
-	TagCmdAck       = "gCmd_Ack"       // BOOL  — TRUE = ack pronto
-)
+// As tags do handshake com o CLP são as de LOTE (gLote_*), definidas em batch.go.
+// O modelo antigo de comando único (gCmd_*) foi substituído pelo lote — os dois
+// são excludentes no ladder (ver docs/mudancas-batch.md).
 
 // OmronNX1P2 implementa Client via EtherNet/IP CIP usando go-ethernet-ip.
 type OmronNX1P2 struct {
@@ -686,7 +671,7 @@ func (c *OmronNX1P2) KeepAlive(ctx context.Context, every time.Duration, log *sl
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if _, err := c.ReadTag(ctx, TagCmdAck); err != nil && log != nil {
+			if _, err := c.ReadTag(ctx, TagLoteAck(Robots[0])); err != nil && log != nil {
 				log.Warn("keepalive falhou", "err", err)
 			}
 		}

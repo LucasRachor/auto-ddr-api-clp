@@ -19,17 +19,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PLCService_Start_FullMethodName                  = "/plc.PLCService/Start"
-	PLCService_Stop_FullMethodName                   = "/plc.PLCService/Stop"
-	PLCService_Reset_FullMethodName                  = "/plc.PLCService/Reset"
-	PLCService_ReadTag_FullMethodName                = "/plc.PLCService/ReadTag"
-	PLCService_WriteTag_FullMethodName               = "/plc.PLCService/WriteTag"
-	PLCService_GetStatus_FullMethodName              = "/plc.PLCService/GetStatus"
-	PLCService_Healthcheck_FullMethodName            = "/plc.PLCService/Healthcheck"
-	PLCService_SubscribeTags_FullMethodName          = "/plc.PLCService/SubscribeTags"
-	PLCService_EnqueueCommand_FullMethodName         = "/plc.PLCService/EnqueueCommand"
-	PLCService_SubscribeCommandStatus_FullMethodName = "/plc.PLCService/SubscribeCommandStatus"
-	PLCService_ConfirmStatus_FullMethodName          = "/plc.PLCService/ConfirmStatus"
+	PLCService_Start_FullMethodName                = "/plc.PLCService/Start"
+	PLCService_Stop_FullMethodName                 = "/plc.PLCService/Stop"
+	PLCService_Reset_FullMethodName                = "/plc.PLCService/Reset"
+	PLCService_ReadTag_FullMethodName              = "/plc.PLCService/ReadTag"
+	PLCService_WriteTag_FullMethodName             = "/plc.PLCService/WriteTag"
+	PLCService_GetStatus_FullMethodName            = "/plc.PLCService/GetStatus"
+	PLCService_Healthcheck_FullMethodName          = "/plc.PLCService/Healthcheck"
+	PLCService_SubscribeTags_FullMethodName        = "/plc.PLCService/SubscribeTags"
+	PLCService_EnqueueBatch_FullMethodName         = "/plc.PLCService/EnqueueBatch"
+	PLCService_SubscribeBatchStatus_FullMethodName = "/plc.PLCService/SubscribeBatchStatus"
+	PLCService_ConfirmBatchStatus_FullMethodName   = "/plc.PLCService/ConfirmBatchStatus"
 )
 
 // PLCServiceClient is the client API for PLCService service.
@@ -44,10 +44,10 @@ type PLCServiceClient interface {
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*StatusResponse, error)
 	Healthcheck(ctx context.Context, in *HealthcheckRequest, opts ...grpc.CallOption) (*HealthcheckResponse, error)
 	SubscribeTags(ctx context.Context, in *SubscribeTagsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TagUpdate], error)
-	// Fila de comandos com confirmação (ack) e correlação por id.
-	EnqueueCommand(ctx context.Context, in *EnqueueCommandRequest, opts ...grpc.CallOption) (*EnqueueCommandResponse, error)
-	SubscribeCommandStatus(ctx context.Context, in *SubscribeCommandStatusRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CommandStatusUpdate], error)
-	ConfirmStatus(ctx context.Context, in *ConfirmStatusRequest, opts ...grpc.CallOption) (*CommandResponse, error)
+	// ---- Lote (gLote/TComando) — ver docs/go-clp-api/lote-mudancas-api-go.md ----
+	EnqueueBatch(ctx context.Context, in *EnqueueBatchRequest, opts ...grpc.CallOption) (*EnqueueBatchResponse, error)
+	SubscribeBatchStatus(ctx context.Context, in *SubscribeBatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BatchStatusUpdate], error)
+	ConfirmBatchStatus(ctx context.Context, in *ConfirmBatchRequest, opts ...grpc.CallOption) (*CommandResponse, error)
 }
 
 type pLCServiceClient struct {
@@ -147,23 +147,23 @@ func (c *pLCServiceClient) SubscribeTags(ctx context.Context, in *SubscribeTagsR
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type PLCService_SubscribeTagsClient = grpc.ServerStreamingClient[TagUpdate]
 
-func (c *pLCServiceClient) EnqueueCommand(ctx context.Context, in *EnqueueCommandRequest, opts ...grpc.CallOption) (*EnqueueCommandResponse, error) {
+func (c *pLCServiceClient) EnqueueBatch(ctx context.Context, in *EnqueueBatchRequest, opts ...grpc.CallOption) (*EnqueueBatchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(EnqueueCommandResponse)
-	err := c.cc.Invoke(ctx, PLCService_EnqueueCommand_FullMethodName, in, out, cOpts...)
+	out := new(EnqueueBatchResponse)
+	err := c.cc.Invoke(ctx, PLCService_EnqueueBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *pLCServiceClient) SubscribeCommandStatus(ctx context.Context, in *SubscribeCommandStatusRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CommandStatusUpdate], error) {
+func (c *pLCServiceClient) SubscribeBatchStatus(ctx context.Context, in *SubscribeBatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BatchStatusUpdate], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &PLCService_ServiceDesc.Streams[1], PLCService_SubscribeCommandStatus_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &PLCService_ServiceDesc.Streams[1], PLCService_SubscribeBatchStatus_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[SubscribeCommandStatusRequest, CommandStatusUpdate]{ClientStream: stream}
+	x := &grpc.GenericClientStream[SubscribeBatchRequest, BatchStatusUpdate]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -174,12 +174,12 @@ func (c *pLCServiceClient) SubscribeCommandStatus(ctx context.Context, in *Subsc
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type PLCService_SubscribeCommandStatusClient = grpc.ServerStreamingClient[CommandStatusUpdate]
+type PLCService_SubscribeBatchStatusClient = grpc.ServerStreamingClient[BatchStatusUpdate]
 
-func (c *pLCServiceClient) ConfirmStatus(ctx context.Context, in *ConfirmStatusRequest, opts ...grpc.CallOption) (*CommandResponse, error) {
+func (c *pLCServiceClient) ConfirmBatchStatus(ctx context.Context, in *ConfirmBatchRequest, opts ...grpc.CallOption) (*CommandResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CommandResponse)
-	err := c.cc.Invoke(ctx, PLCService_ConfirmStatus_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, PLCService_ConfirmBatchStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -198,10 +198,10 @@ type PLCServiceServer interface {
 	GetStatus(context.Context, *GetStatusRequest) (*StatusResponse, error)
 	Healthcheck(context.Context, *HealthcheckRequest) (*HealthcheckResponse, error)
 	SubscribeTags(*SubscribeTagsRequest, grpc.ServerStreamingServer[TagUpdate]) error
-	// Fila de comandos com confirmação (ack) e correlação por id.
-	EnqueueCommand(context.Context, *EnqueueCommandRequest) (*EnqueueCommandResponse, error)
-	SubscribeCommandStatus(*SubscribeCommandStatusRequest, grpc.ServerStreamingServer[CommandStatusUpdate]) error
-	ConfirmStatus(context.Context, *ConfirmStatusRequest) (*CommandResponse, error)
+	// ---- Lote (gLote/TComando) — ver docs/go-clp-api/lote-mudancas-api-go.md ----
+	EnqueueBatch(context.Context, *EnqueueBatchRequest) (*EnqueueBatchResponse, error)
+	SubscribeBatchStatus(*SubscribeBatchRequest, grpc.ServerStreamingServer[BatchStatusUpdate]) error
+	ConfirmBatchStatus(context.Context, *ConfirmBatchRequest) (*CommandResponse, error)
 	mustEmbedUnimplementedPLCServiceServer()
 }
 
@@ -236,14 +236,14 @@ func (UnimplementedPLCServiceServer) Healthcheck(context.Context, *HealthcheckRe
 func (UnimplementedPLCServiceServer) SubscribeTags(*SubscribeTagsRequest, grpc.ServerStreamingServer[TagUpdate]) error {
 	return status.Error(codes.Unimplemented, "method SubscribeTags not implemented")
 }
-func (UnimplementedPLCServiceServer) EnqueueCommand(context.Context, *EnqueueCommandRequest) (*EnqueueCommandResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method EnqueueCommand not implemented")
+func (UnimplementedPLCServiceServer) EnqueueBatch(context.Context, *EnqueueBatchRequest) (*EnqueueBatchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnqueueBatch not implemented")
 }
-func (UnimplementedPLCServiceServer) SubscribeCommandStatus(*SubscribeCommandStatusRequest, grpc.ServerStreamingServer[CommandStatusUpdate]) error {
-	return status.Error(codes.Unimplemented, "method SubscribeCommandStatus not implemented")
+func (UnimplementedPLCServiceServer) SubscribeBatchStatus(*SubscribeBatchRequest, grpc.ServerStreamingServer[BatchStatusUpdate]) error {
+	return status.Error(codes.Unimplemented, "method SubscribeBatchStatus not implemented")
 }
-func (UnimplementedPLCServiceServer) ConfirmStatus(context.Context, *ConfirmStatusRequest) (*CommandResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ConfirmStatus not implemented")
+func (UnimplementedPLCServiceServer) ConfirmBatchStatus(context.Context, *ConfirmBatchRequest) (*CommandResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfirmBatchStatus not implemented")
 }
 func (UnimplementedPLCServiceServer) mustEmbedUnimplementedPLCServiceServer() {}
 func (UnimplementedPLCServiceServer) testEmbeddedByValue()                    {}
@@ -403,49 +403,49 @@ func _PLCService_SubscribeTags_Handler(srv interface{}, stream grpc.ServerStream
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type PLCService_SubscribeTagsServer = grpc.ServerStreamingServer[TagUpdate]
 
-func _PLCService_EnqueueCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(EnqueueCommandRequest)
+func _PLCService_EnqueueBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnqueueBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PLCServiceServer).EnqueueCommand(ctx, in)
+		return srv.(PLCServiceServer).EnqueueBatch(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PLCService_EnqueueCommand_FullMethodName,
+		FullMethod: PLCService_EnqueueBatch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PLCServiceServer).EnqueueCommand(ctx, req.(*EnqueueCommandRequest))
+		return srv.(PLCServiceServer).EnqueueBatch(ctx, req.(*EnqueueBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PLCService_SubscribeCommandStatus_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(SubscribeCommandStatusRequest)
+func _PLCService_SubscribeBatchStatus_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SubscribeBatchRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(PLCServiceServer).SubscribeCommandStatus(m, &grpc.GenericServerStream[SubscribeCommandStatusRequest, CommandStatusUpdate]{ServerStream: stream})
+	return srv.(PLCServiceServer).SubscribeBatchStatus(m, &grpc.GenericServerStream[SubscribeBatchRequest, BatchStatusUpdate]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type PLCService_SubscribeCommandStatusServer = grpc.ServerStreamingServer[CommandStatusUpdate]
+type PLCService_SubscribeBatchStatusServer = grpc.ServerStreamingServer[BatchStatusUpdate]
 
-func _PLCService_ConfirmStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ConfirmStatusRequest)
+func _PLCService_ConfirmBatchStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfirmBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PLCServiceServer).ConfirmStatus(ctx, in)
+		return srv.(PLCServiceServer).ConfirmBatchStatus(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PLCService_ConfirmStatus_FullMethodName,
+		FullMethod: PLCService_ConfirmBatchStatus_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PLCServiceServer).ConfirmStatus(ctx, req.(*ConfirmStatusRequest))
+		return srv.(PLCServiceServer).ConfirmBatchStatus(ctx, req.(*ConfirmBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -486,12 +486,12 @@ var PLCService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PLCService_Healthcheck_Handler,
 		},
 		{
-			MethodName: "EnqueueCommand",
-			Handler:    _PLCService_EnqueueCommand_Handler,
+			MethodName: "EnqueueBatch",
+			Handler:    _PLCService_EnqueueBatch_Handler,
 		},
 		{
-			MethodName: "ConfirmStatus",
-			Handler:    _PLCService_ConfirmStatus_Handler,
+			MethodName: "ConfirmBatchStatus",
+			Handler:    _PLCService_ConfirmBatchStatus_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
@@ -501,8 +501,8 @@ var PLCService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 		{
-			StreamName:    "SubscribeCommandStatus",
-			Handler:       _PLCService_SubscribeCommandStatus_Handler,
+			StreamName:    "SubscribeBatchStatus",
+			Handler:       _PLCService_SubscribeBatchStatus_Handler,
 			ServerStreams: true,
 		},
 	},
