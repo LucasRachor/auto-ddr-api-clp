@@ -43,6 +43,10 @@ type Client interface {
 	ReadTag(ctx context.Context, tag string) (TagValue, error)
 	WriteTag(ctx context.Context, tag string, v TagValue) error
 
+	// WriteStructRaw escreve um UDT / array de UDT num único frame. 'data' são os
+	// bytes de todos os elementos já no packing do UDT (ver EncodeBatch).
+	WriteStructRaw(ctx context.Context, name string, data []byte) error
+
 	Status(ctx context.Context) (Status, error)
 }
 

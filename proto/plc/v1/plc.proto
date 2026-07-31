@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package plc.v1;
+package plc;
 
 option go_package = "go_auto_ddr_clp/gen/plc/v1;plcv1";
 
@@ -13,6 +13,11 @@ service PLCService {
   rpc GetStatus     (GetStatusRequest)     returns (StatusResponse);
   rpc Healthcheck   (HealthcheckRequest)   returns (HealthcheckResponse);
   rpc SubscribeTags (SubscribeTagsRequest) returns (stream TagUpdate);
+
+  // ---- Lote (gLote/TComando) — ver docs/go-clp-api/lote-mudancas-api-go.md ----
+  rpc EnqueueBatch         (EnqueueBatchRequest)   returns (EnqueueBatchResponse);
+  rpc SubscribeBatchStatus (SubscribeBatchRequest) returns (stream BatchStatusUpdate);
+  rpc ConfirmBatchStatus   (ConfirmBatchRequest)   returns (CommandResponse);
 }
 
 message StartRequest  {}
@@ -64,4 +69,68 @@ message TagUpdate {
   string   tag        = 1;
   TagValue value      = 2;
   int64    ts_unix_ms = 3;
+}
+
+// ---- Lote (gLote/TComando) ----
+
+enum BatchState {
+  BQ_QUEUED      = 0;
+  BQ_DISPATCHED  = 1;
+  BQ_STARTED     = 2;
+  BQ_ACKED_OK    = 3;
+  BQ_ACKED_ERROR = 4;
+  BQ_FAILED      = 5;
+}
+
+// 1 item do lote (struct TComando). Campos não-aplicáveis = 0.
+message TComandoMsg {
+  int32 position = 1; // 1..5 (índice em gLote, base-1)
+  int32 dedo     = 2;
+  int32 dedo_2   = 3;
+  int32 estande  = 4;
+  int32 bandeja  = 5;
+  int32 fileira  = 6;
+  int32 coluna   = 7;
+  int32 rack     = 8;
+  int32 placa    = 9;
+  int32 slot     = 10;
+}
+
+message EnqueueBatchRequest {
+  int32 batch_id = 1; // gLote_Id (DINT), único por robô
+  int32 robot    = 2; // 1..2 -> _Robo1/_Robo2
+  int32 acao     = 3; // 1..5 (lote homogêneo)
+  int32 qtd      = 4; // gLote_Qtd (1..5)
+  repeated TComandoMsg items = 5;
+}
+
+message EnqueueBatchResponse {
+  bool   accepted  = 1;
+  int32  batch_id  = 2;
+  string message   = 3;
+  // duplicate: já havia um lote com este (robot, batch_id). A fila é idempotente e
+  // devolve o registro antigo SEM despachar o novo; sem este campo o chamador não
+  // distingue isso de um enfileiramento real e o lote trava em silêncio.
+  bool   duplicate = 4;
+}
+
+message ItemStatusMsg {
+  int32 position = 1;
+  int32 status   = 2; // 0=pendente, 1=ok, 2=erro
+}
+
+message BatchStatusUpdate {
+  int32                batch_id   = 1;
+  int32                robot      = 2;
+  BatchState           state      = 3;
+  repeated ItemStatusMsg items    = 4;
+  string               detail     = 5;
+  int64                ts_unix_ms = 6;
+}
+
+message SubscribeBatchRequest {}
+
+message ConfirmBatchRequest {
+  int32 batch_id = 1;
+  int32 robot    = 2;
 }

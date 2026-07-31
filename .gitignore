@@ -1,0 +1,7 @@
+# Banco durável da fila de comandos (bbolt)
+/data/
+*.db
+
+# Binários
+/server
+*.exe

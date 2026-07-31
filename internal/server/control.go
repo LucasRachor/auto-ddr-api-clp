@@ -1,12 +1,15 @@
 package server
 
-import "context"
+import (
+	"context"
+	pb "go_auto_ddr_clp/gen/plc/v1"
+)
 
 // Após `protoc`, troque as assinaturas por:
 //   func (s *PLCServer) Start(ctx context.Context, _ *pb.StartRequest) (*pb.CommandResponse, error)
 // e por aí vai. As implementações abaixo já usam s.PLC, basta empacotar a resposta.
 
-func (s *PLCServer) doStart(ctx context.Context) error {
+func (s *PLCServer) doStart(ctx context.Context, _ *pb.StartRequest) error {
 	s.Log.Info("rpc Start")
 	return s.PLC.Start(ctx)
 }
