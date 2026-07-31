@@ -168,31 +168,44 @@ func runDirect(rec queue.Record, host string, startTimeout, ackTimeout time.Dura
 	}
 	fmt.Println("Req=TRUE — aguardando o CLP travar o lote (Start)...")
 
+	// Com Req=TRUE no ar, qualquer falha rebaixa o Req antes de sair — senão o CLP
+	// pode travar/executar o lote depois que o tool já morreu.
+	abort := func(err error) bool {
+		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if werr := h.writeBool(cctx, plc.TagLoteReq(robot), false); werr == nil {
+			fmt.Println("(Req rebaixado após a falha)")
+		} else {
+			fmt.Println("ATENÇÃO: não consegui rebaixar o Req:", werr)
+		}
+		return fail(err)
+	}
+
 	// 4. O CLP trava o lote e começa a executar.
 	if err := h.waitBool(ctx, plc.TagLoteStart(robot), true, startTimeout); err != nil {
-		return fail(err)
+		return abort(err)
 	}
 	fmt.Println("Start=TRUE — robô executando; aguardando Ack...")
 
 	// 5. O CLP concluiu o lote.
 	if err := h.waitBool(ctx, plc.TagLoteAck(robot), true, ackTimeout); err != nil {
-		return fail(err)
+		return abort(err)
 	}
 	fmt.Println("Ack=TRUE — conferindo eco do id e status dos itens")
 
 	// 6. Confere o eco do id e colhe o status de cada item.
 	echo, err := h.readInt(ctx, plc.TagLoteId(robot))
 	if err != nil {
-		return fail(err)
+		return abort(err)
 	}
 	if echo != rec.BatchID {
-		return fail(fmt.Errorf("eco de %s = %d, esperava %d", plc.TagLoteId(robot), echo, rec.BatchID))
+		return abort(fmt.Errorf("eco de %s = %d, esperava %d", plc.TagLoteId(robot), echo, rec.BatchID))
 	}
 	allOK := true
 	for _, it := range rec.Items {
 		st, err := h.readInt(ctx, plc.TagLoteItemStatus(robot, int(it.Position)))
 		if err != nil {
-			return fail(err)
+			return abort(err)
 		}
 		fmt.Printf("  gLote[%d].status = %d\n", it.Position, st)
 		if st != plc.ItemStatusOK {
