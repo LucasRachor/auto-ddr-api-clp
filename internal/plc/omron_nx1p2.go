@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -46,7 +47,6 @@ type OmronNX1P2 struct {
 	mu        sync.Mutex
 	connected bool
 	raw       *eip.EIPTCP
-	tags      map[string]*eip.Tag
 }
 
 func NewOmronNX1P2(host string, port uint16) *OmronNX1P2 {
@@ -95,7 +95,6 @@ func (c *OmronNX1P2) Connect(ctx context.Context) error {
 	}
 	c.raw = cli
 	c.connected = true
-	c.tags = make(map[string]*eip.Tag)
 	return nil
 }
 
@@ -140,7 +139,6 @@ func (c *OmronNX1P2) reconnect(ctx context.Context, stale *eip.EIPTCP) error {
 		_ = c.raw.UnRegisterSession() // best-effort; a sessão pode já estar morta
 	}
 	c.raw = nil
-	c.tags = nil
 	c.connected = false
 	c.mu.Unlock()
 	return c.Connect(ctx)
@@ -161,23 +159,6 @@ func (c *OmronNX1P2) withRetry(ctx context.Context, op func() error) error {
 		return fmt.Errorf("%w (reconexão falhou: %v)", err, rerr)
 	}
 	return op()
-}
-
-// getTag retorna o *eip.Tag do cache; se não existir, inicializa sob demanda.
-// InitializeTag preenche Lock/TCP (obrigatórios para Read/Write não dar panic).
-func (c *OmronNX1P2) getTag(name string) *eip.Tag {
-	if c.tags == nil {
-		c.tags = make(map[string]*eip.Tag)
-	}
-	if t, ok := c.tags[name]; ok {
-		return t
-	}
-	t := &eip.Tag{}
-	if c.raw != nil {
-		c.raw.InitializeTag(name, t)
-	}
-	c.tags[name] = t
-	return t
 }
 
 // TagMeta descreve uma tag publicada (Network Publish) lida do CLP.
@@ -651,7 +632,6 @@ func (c *OmronNX1P2) Close() error {
 		unregErr = c.raw.UnRegisterSession()
 	}
 	c.raw = nil
-	c.tags = nil
 	c.connected = false
 	if unregErr != nil {
 		return fmt.Errorf("plc unregister session: %w", unregErr)
@@ -698,49 +678,98 @@ func (c *OmronNX1P2) pulse(ctx context.Context, tag string) error {
 	return nil
 }
 
+// ReadTag lê uma tag pela abstração TagValue, decodificando pelo type code CIP.
+// Implementado sobre ReadTagRaw (symbolic + UCMM-direto), o MESMO caminho comprovado
+// da escrita e do cmd/readtag. A leitura de alto nível da lib (Tag.Read) quebra no
+// NX1P2 e ainda engole o erro do parser, devolvendo o cache congelado — contra o
+// hardware real ela lia zero para sempre (descoberto no primeiro teste com o CLP:
+// gLote_Start subia no controlador e o dispatcher nunca via).
 func (c *OmronNX1P2) ReadTag(ctx context.Context, tag string) (TagValue, error) {
 	if !c.connected {
 		return TagValue{}, ErrNotConnected
 	}
-	// getTag é chamado dentro do withRetry porque a reconexão zera o cache de tags:
-	// após reconectar, precisamos de um *eip.Tag reinicializado contra a nova sessão.
-	var t *eip.Tag
+	var (
+		code uint16
+		raw  []byte
+	)
 	if err := c.withRetry(ctx, func() error {
-		t = c.getTag(tag)
-		if err := t.Read(); err != nil {
-			return fmt.Errorf("read %s: %w", tag, err)
-		}
-		return nil
+		var err error
+		code, raw, err = c.ReadTagRaw(ctx, tag)
+		return err
 	}); err != nil {
 		return TagValue{}, err
 	}
-	switch v := t.GetValue().(type) {
-	case bool:
+	return decodeTagValue(tag, code, raw)
+}
+
+// decodeTagValue converte {type code CIP, bytes crus} num TagValue. O BOOL do
+// NX1P2 ocupa 2 bytes (0x0001 = TRUE); aceita 1 ou 2 por segurança.
+func decodeTagValue(tag string, code uint16, raw []byte) (TagValue, error) {
+	need := func(n int) error {
+		if len(raw) < n {
+			return fmt.Errorf("read %s: tipo %#04x com %d bytes (esperava >= %d)", tag, code, len(raw), n)
+		}
+		return nil
+	}
+	switch code {
+	case 0xC1: // BOOL
+		if err := need(1); err != nil {
+			return TagValue{}, err
+		}
+		v := false
+		for _, b := range raw {
+			if b != 0 {
+				v = true
+				break
+			}
+		}
 		return TagValue{Kind: KindBool, Bool: v}, nil
-	case int8:
-		return TagValue{Kind: KindInt, Int: int32(v)}, nil
-	case int16:
-		return TagValue{Kind: KindInt, Int: int32(v)}, nil
-	case uint8:
-		return TagValue{Kind: KindInt, Int: int32(v)}, nil
-	case uint16:
-		return TagValue{Kind: KindInt, Int: int32(v)}, nil
-	case int32:
-		return TagValue{Kind: KindDInt, DInt: int64(v)}, nil
-	case uint32:
-		return TagValue{Kind: KindDInt, DInt: int64(v)}, nil
-	case int64:
-		return TagValue{Kind: KindDInt, DInt: v}, nil
-	case uint64:
-		return TagValue{Kind: KindDInt, DInt: int64(v)}, nil
-	case float32:
-		return TagValue{Kind: KindReal, Real: v}, nil
-	case float64:
-		return TagValue{Kind: KindReal, Real: float32(v)}, nil
-	case string:
-		return TagValue{Kind: KindString, String: v}, nil
-	default:
-		return TagValue{Kind: KindString, String: t.String()}, nil
+	case 0xC2: // SINT
+		if err := need(1); err != nil {
+			return TagValue{}, err
+		}
+		return TagValue{Kind: KindInt, Int: int32(int8(raw[0]))}, nil
+	case 0xC6: // USINT
+		if err := need(1); err != nil {
+			return TagValue{}, err
+		}
+		return TagValue{Kind: KindInt, Int: int32(raw[0])}, nil
+	case 0xC3, 0xC7: // INT / UINT
+		if err := need(2); err != nil {
+			return TagValue{}, err
+		}
+		return TagValue{Kind: KindInt, Int: int32(int16(binary.LittleEndian.Uint16(raw)))}, nil
+	case 0xC4, 0xC8: // DINT / UDINT
+		if err := need(4); err != nil {
+			return TagValue{}, err
+		}
+		return TagValue{Kind: KindDInt, DInt: int64(int32(binary.LittleEndian.Uint32(raw)))}, nil
+	case 0xC5: // LINT
+		if err := need(8); err != nil {
+			return TagValue{}, err
+		}
+		return TagValue{Kind: KindDInt, DInt: int64(binary.LittleEndian.Uint64(raw))}, nil
+	case 0xCA: // REAL
+		if err := need(4); err != nil {
+			return TagValue{}, err
+		}
+		return TagValue{Kind: KindReal, Real: math.Float32frombits(binary.LittleEndian.Uint32(raw))}, nil
+	case 0xCB: // LREAL
+		if err := need(8); err != nil {
+			return TagValue{}, err
+		}
+		return TagValue{Kind: KindReal, Real: float32(math.Float64frombits(binary.LittleEndian.Uint64(raw)))}, nil
+	case 0xD0: // STRING: [tamanho UInt (2 bytes)][chars]
+		if err := need(2); err != nil {
+			return TagValue{}, err
+		}
+		n := int(binary.LittleEndian.Uint16(raw))
+		if 2+n > len(raw) {
+			n = len(raw) - 2
+		}
+		return TagValue{Kind: KindString, String: string(raw[2 : 2+n])}, nil
+	default: // 0x02A0 (struct/UDT) e afins: sem representação em TagValue
+		return TagValue{}, fmt.Errorf("read %s: tipo %#04x não-atômico; use ReadTagRaw", tag, code)
 	}
 }
 
