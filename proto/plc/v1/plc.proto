@@ -18,6 +18,14 @@ service PLCService {
   rpc EnqueueBatch         (EnqueueBatchRequest)   returns (EnqueueBatchResponse);
   rpc SubscribeBatchStatus (SubscribeBatchRequest) returns (stream BatchStatusUpdate);
   rpc ConfirmBatchStatus   (ConfirmBatchRequest)   returns (CommandResponse);
+
+  // ---- Presença de bandeja (gBandejaPresente/TStatusAlimentador) ----
+  // CLP -> Software sem handshake: o CLP mantém as 8 posições sempre atualizadas
+  // pelos sensores; a API polla e emite on-change. Cada update carrega o snapshot
+  // COMPLETO do robô (nunca delta) e o stream envia um frame inicial ao assinar —
+  // o consumidor reconcilia tudo em qualquer reconexão, sem Get de bootstrap.
+  rpc GetFeederStatus       (GetFeederStatusRequest)       returns (FeederStatusSnapshot);
+  rpc SubscribeFeederStatus (SubscribeFeederStatusRequest) returns (stream FeederStatusUpdate);
 }
 
 message StartRequest  {}
@@ -133,4 +141,30 @@ message SubscribeBatchRequest {}
 message ConfirmBatchRequest {
   int32 batch_id = 1;
   int32 robot    = 2;
+}
+
+// ---- Presença de bandeja (gBandejaPresente/TStatusAlimentador) ----
+
+message TrayPresence {
+  int32 estande = 1; // 1..2
+  int32 bandeja = 2; // 1..4
+  bool  present = 3; // TRUE = há bandeja física na posição
+}
+
+message GetFeederStatusRequest {}
+
+// Snapshot dos 2 robôs, na ordem de plc.Robots.
+message FeederStatusSnapshot {
+  repeated FeederStatusUpdate robots = 1;
+}
+
+message SubscribeFeederStatusRequest {
+  uint32 poll_ms = 1; // 0 = default do servidor (500ms); mínimo 100ms
+}
+
+// Snapshot COMPLETO das 8 posições de um robô (nunca delta).
+message FeederStatusUpdate {
+  int32                 robot      = 1; // 1..2 -> gBandejaPresente_Robo1/2
+  repeated TrayPresence trays      = 2; // sempre as 8 posições
+  int64                 ts_unix_ms = 3;
 }

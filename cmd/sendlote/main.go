@@ -24,6 +24,9 @@
 //	# inserção na placa (rack 1, placa 1, slot 1), pelo servidor (gRPC)
 //	go run ./cmd/sendlote -acao 2 -item "dedo=1,rack=1,placa=1,slot=1"
 //
+//	# só inspecionar o slot gLote (Req/Start/Ack/Id/Qtd + status dos itens), sem enviar nada
+//	go run ./cmd/sendlote -status
+//
 // Campos por item: dedo, dedo2 (só acao 5), estande, bandeja, fileira, coluna
 // (ações de bandeja 1/4) ou rack, placa, slot (ações de placa). Position é
 // atribuída na ordem dos -item. A validação é a mesma do servidor
@@ -66,8 +69,17 @@ func main() {
 	batchID := flag.Int("id", 0, "gLote_Id; 0 = deriva do relógio (único entre corridas)")
 	startTimeout := flag.Duration("start-timeout", 15*time.Second, "espera pelo gLote_Start")
 	ackTimeout := flag.Duration("ack-timeout", 5*time.Minute, "espera pelo gLote_Ack (robô executando)")
+	idleTimeout := flag.Duration("idle-timeout", 30*time.Second, "espera pela liberação do slot (Start/Ack caírem) antes de enviar")
+	statusOnly := flag.Bool("status", false, "só lê e mostra o estado do slot gLote (não envia nada); implica -direct")
 	flag.Var(&items, "item", `item do lote, "campo=valor,..." (repetível; position segue a ordem)`)
 	flag.Parse()
+
+	if *statusOnly {
+		if !runStatus(*host, int32(*robot)) {
+			os.Exit(1)
+		}
+		return
+	}
 
 	id := int64(*batchID)
 	if id == 0 {
@@ -103,7 +115,7 @@ func main() {
 
 	ok := false
 	if *direct {
-		ok = runDirect(rec, *host, *startTimeout, *ackTimeout)
+		ok = runDirect(rec, *host, *idleTimeout, *startTimeout, *ackTimeout)
 	} else {
 		ok = runGRPC(rec, *addr, *startTimeout+*ackTimeout)
 	}
@@ -115,13 +127,13 @@ func main() {
 
 // --- modo -direct: handshake inline contra o CLP (espelho do dispatcher) ---
 
-func runDirect(rec queue.Record, host string, startTimeout, ackTimeout time.Duration) bool {
+func runDirect(rec queue.Record, host string, idleTimeout, startTimeout, ackTimeout time.Duration) bool {
 	cfg := config.Load()
 	if host == "" {
 		host = cfg.CLPHost
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), startTimeout+ackTimeout+30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), idleTimeout+startTimeout+ackTimeout+60*time.Second)
 	defer cancel()
 
 	clp := plc.NewOmronNX1P2(host, cfg.CLPPort)
@@ -135,14 +147,20 @@ func runDirect(rec queue.Record, host string, startTimeout, ackTimeout time.Dura
 	robot := rec.Robot
 	h := handshake{clp: clp, poll: 100 * time.Millisecond}
 
-	// 1. Garante o slot do robô ocioso (Req=false, Start/Ack baixados).
+	// 1. Garante o slot do robô ocioso (Req=false, Start/Ack baixados). Mostra o
+	// estado atual ANTES de esperar: slot preso por um lote antigo é visível na hora.
+	printSlot(ctx, h, robot)
 	if err := h.writeBool(ctx, plc.TagLoteReq(robot), false); err != nil {
 		return fail(err)
 	}
-	if err := h.waitBool(ctx, plc.TagLoteStart(robot), false, ackTimeout); err != nil {
+	if err := h.waitBool(ctx, plc.TagLoteStart(robot), false, idleTimeout); err != nil {
+		fmt.Println("O slot não liberou: o ladder ainda exibe o lote anterior. Rode com -status")
+		fmt.Println("para inspecionar, e verifique no CLP/IHM se o robô concluiu ou está em falha.")
 		return fail(fmt.Errorf("CLP não liberou o slot do robô %d: %w", robot, err))
 	}
-	if err := h.waitBool(ctx, plc.TagLoteAck(robot), false, ackTimeout); err != nil {
+	if err := h.waitBool(ctx, plc.TagLoteAck(robot), false, idleTimeout); err != nil {
+		fmt.Println("O slot não liberou: o ladder ainda exibe o lote anterior. Rode com -status")
+		fmt.Println("para inspecionar, e verifique no CLP/IHM se o robô concluiu ou está em falha.")
 		return fail(fmt.Errorf("CLP não liberou o slot do robô %d: %w", robot, err))
 	}
 
@@ -231,6 +249,53 @@ func fail(err error) bool {
 	return false
 }
 
+// printSlot mostra o estado atual do slot gLote do robô (best-effort: erro de
+// leitura vira "?"). É o retrato que o operador precisa quando algo trava.
+func printSlot(ctx context.Context, h handshake, robot int32) {
+	read := func(tag string) string {
+		v, err := h.readInt(ctx, tag)
+		if err != nil {
+			return "?"
+		}
+		return fmt.Sprintf("%d", v)
+	}
+	fmt.Printf("slot do robô %d: Req=%s Start=%s Ack=%s Id=%s Qtd=%s\n", robot,
+		read(plc.TagLoteReq(robot)), read(plc.TagLoteStart(robot)),
+		read(plc.TagLoteAck(robot)), read(plc.TagLoteId(robot)), read(plc.TagLoteQtd(robot)))
+}
+
+// runStatus (-status): conecta, mostra o slot e o .status de cada item, e sai
+// sem escrever NADA no CLP. Retorna false só em falha de conexão.
+func runStatus(host string, robot int32) bool {
+	cfg := config.Load()
+	if host == "" {
+		host = cfg.CLPHost
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	clp := plc.NewOmronNX1P2(host, cfg.CLPPort)
+	if err := clp.Connect(ctx); err != nil {
+		fmt.Printf("connect %s:%d falhou: %v\n", host, cfg.CLPPort, err)
+		return false
+	}
+	defer clp.Close()
+	fmt.Printf("conectado direto no CLP em %s:%d\n", host, cfg.CLPPort)
+
+	h := handshake{clp: clp, poll: 100 * time.Millisecond}
+	printSlot(ctx, h, robot)
+	for i := 1; i <= plc.BatchSize; i++ {
+		st, err := h.readInt(ctx, plc.TagLoteItemStatus(robot, i))
+		if err != nil {
+			fmt.Printf("  gLote[%d].status = ? (%v)\n", i, err)
+			continue
+		}
+		fmt.Printf("  gLote[%d].status = %d\n", i, st)
+	}
+	fmt.Println("(0=pendente, 1=ok, 2=erro; Start=1 sem Ack = lote travado executando/em falha)")
+	return true
+}
+
 // handshake agrupa os helpers de leitura/escrita usados na sequência do lote.
 type handshake struct {
 	clp  plc.Client
@@ -263,7 +328,9 @@ func (h handshake) readInt(ctx context.Context, tag string) (int64, error) {
 }
 
 func (h handshake) waitBool(ctx context.Context, tag string, want bool, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	began := time.Now()
+	deadline := began.Add(timeout)
+	lastLog := began
 	for {
 		v, err := h.readInt(ctx, tag)
 		if err != nil {
@@ -274,6 +341,12 @@ func (h handshake) waitBool(ctx context.Context, tag string, want bool, timeout 
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s: esperava %v: timeout após %s", tag, want, timeout)
+		}
+		// Progresso a cada 5s para a espera nunca ficar muda.
+		if time.Since(lastLog) >= 5*time.Second {
+			lastLog = time.Now()
+			fmt.Printf("  ... aguardando %s=%v (agora %d, %.0fs decorridos)\n",
+				tag, want, v, time.Since(began).Seconds())
 		}
 		select {
 		case <-ctx.Done():

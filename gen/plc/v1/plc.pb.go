@@ -1293,6 +1293,252 @@ func (x *ConfirmBatchRequest) GetRobot() int32 {
 	return 0
 }
 
+type TrayPresence struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Estande       int32                  `protobuf:"varint,1,opt,name=estande,proto3" json:"estande,omitempty"` // 1..2
+	Bandeja       int32                  `protobuf:"varint,2,opt,name=bandeja,proto3" json:"bandeja,omitempty"` // 1..4
+	Present       bool                   `protobuf:"varint,3,opt,name=present,proto3" json:"present,omitempty"` // TRUE = há bandeja física na posição
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrayPresence) Reset() {
+	*x = TrayPresence{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrayPresence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrayPresence) ProtoMessage() {}
+
+func (x *TrayPresence) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrayPresence.ProtoReflect.Descriptor instead.
+func (*TrayPresence) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *TrayPresence) GetEstande() int32 {
+	if x != nil {
+		return x.Estande
+	}
+	return 0
+}
+
+func (x *TrayPresence) GetBandeja() int32 {
+	if x != nil {
+		return x.Bandeja
+	}
+	return 0
+}
+
+func (x *TrayPresence) GetPresent() bool {
+	if x != nil {
+		return x.Present
+	}
+	return false
+}
+
+type GetFeederStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetFeederStatusRequest) Reset() {
+	*x = GetFeederStatusRequest{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetFeederStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetFeederStatusRequest) ProtoMessage() {}
+
+func (x *GetFeederStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetFeederStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetFeederStatusRequest) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{22}
+}
+
+// Snapshot dos 2 robôs, na ordem de plc.Robots.
+type FeederStatusSnapshot struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Robots        []*FeederStatusUpdate  `protobuf:"bytes,1,rep,name=robots,proto3" json:"robots,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FeederStatusSnapshot) Reset() {
+	*x = FeederStatusSnapshot{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FeederStatusSnapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FeederStatusSnapshot) ProtoMessage() {}
+
+func (x *FeederStatusSnapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FeederStatusSnapshot.ProtoReflect.Descriptor instead.
+func (*FeederStatusSnapshot) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *FeederStatusSnapshot) GetRobots() []*FeederStatusUpdate {
+	if x != nil {
+		return x.Robots
+	}
+	return nil
+}
+
+type SubscribeFeederStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PollMs        uint32                 `protobuf:"varint,1,opt,name=poll_ms,json=pollMs,proto3" json:"poll_ms,omitempty"` // 0 = default do servidor (500ms); mínimo 100ms
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubscribeFeederStatusRequest) Reset() {
+	*x = SubscribeFeederStatusRequest{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscribeFeederStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscribeFeederStatusRequest) ProtoMessage() {}
+
+func (x *SubscribeFeederStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscribeFeederStatusRequest.ProtoReflect.Descriptor instead.
+func (*SubscribeFeederStatusRequest) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *SubscribeFeederStatusRequest) GetPollMs() uint32 {
+	if x != nil {
+		return x.PollMs
+	}
+	return 0
+}
+
+// Snapshot COMPLETO das 8 posições de um robô (nunca delta).
+type FeederStatusUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Robot         int32                  `protobuf:"varint,1,opt,name=robot,proto3" json:"robot,omitempty"` // 1..2 -> gBandejaPresente_Robo1/2
+	Trays         []*TrayPresence        `protobuf:"bytes,2,rep,name=trays,proto3" json:"trays,omitempty"`  // sempre as 8 posições
+	TsUnixMs      int64                  `protobuf:"varint,3,opt,name=ts_unix_ms,json=tsUnixMs,proto3" json:"ts_unix_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FeederStatusUpdate) Reset() {
+	*x = FeederStatusUpdate{}
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FeederStatusUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FeederStatusUpdate) ProtoMessage() {}
+
+func (x *FeederStatusUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_plc_v1_plc_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FeederStatusUpdate.ProtoReflect.Descriptor instead.
+func (*FeederStatusUpdate) Descriptor() ([]byte, []int) {
+	return file_proto_plc_v1_plc_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *FeederStatusUpdate) GetRobot() int32 {
+	if x != nil {
+		return x.Robot
+	}
+	return 0
+}
+
+func (x *FeederStatusUpdate) GetTrays() []*TrayPresence {
+	if x != nil {
+		return x.Trays
+	}
+	return nil
+}
+
+func (x *FeederStatusUpdate) GetTsUnixMs() int64 {
+	if x != nil {
+		return x.TsUnixMs
+	}
+	return 0
+}
+
 var File_proto_plc_v1_plc_proto protoreflect.FileDescriptor
 
 const file_proto_plc_v1_plc_proto_rawDesc = "" +
@@ -1373,7 +1619,21 @@ const file_proto_plc_v1_plc_proto_rawDesc = "" +
 	"\x15SubscribeBatchRequest\"F\n" +
 	"\x13ConfirmBatchRequest\x12\x19\n" +
 	"\bbatch_id\x18\x01 \x01(\x05R\abatchId\x12\x14\n" +
-	"\x05robot\x18\x02 \x01(\x05R\x05robot*r\n" +
+	"\x05robot\x18\x02 \x01(\x05R\x05robot\"\\\n" +
+	"\fTrayPresence\x12\x18\n" +
+	"\aestande\x18\x01 \x01(\x05R\aestande\x12\x18\n" +
+	"\abandeja\x18\x02 \x01(\x05R\abandeja\x12\x18\n" +
+	"\apresent\x18\x03 \x01(\bR\apresent\"\x18\n" +
+	"\x16GetFeederStatusRequest\"G\n" +
+	"\x14FeederStatusSnapshot\x12/\n" +
+	"\x06robots\x18\x01 \x03(\v2\x17.plc.FeederStatusUpdateR\x06robots\"7\n" +
+	"\x1cSubscribeFeederStatusRequest\x12\x17\n" +
+	"\apoll_ms\x18\x01 \x01(\rR\x06pollMs\"q\n" +
+	"\x12FeederStatusUpdate\x12\x14\n" +
+	"\x05robot\x18\x01 \x01(\x05R\x05robot\x12'\n" +
+	"\x05trays\x18\x02 \x03(\v2\x11.plc.TrayPresenceR\x05trays\x12\x1c\n" +
+	"\n" +
+	"ts_unix_ms\x18\x03 \x01(\x03R\btsUnixMs*r\n" +
 	"\n" +
 	"BatchState\x12\r\n" +
 	"\tBQ_QUEUED\x10\x00\x12\x11\n" +
@@ -1382,7 +1642,7 @@ const file_proto_plc_v1_plc_proto_rawDesc = "" +
 	"BQ_STARTED\x10\x02\x12\x0f\n" +
 	"\vBQ_ACKED_OK\x10\x03\x12\x12\n" +
 	"\x0eBQ_ACKED_ERROR\x10\x04\x12\r\n" +
-	"\tBQ_FAILED\x10\x052\xa0\x05\n" +
+	"\tBQ_FAILED\x10\x052\xc2\x06\n" +
 	"\n" +
 	"PLCService\x120\n" +
 	"\x05Start\x12\x11.plc.StartRequest\x1a\x14.plc.CommandResponse\x12.\n" +
@@ -1395,7 +1655,9 @@ const file_proto_plc_v1_plc_proto_rawDesc = "" +
 	"\rSubscribeTags\x12\x19.plc.SubscribeTagsRequest\x1a\x0e.plc.TagUpdate0\x01\x12C\n" +
 	"\fEnqueueBatch\x12\x18.plc.EnqueueBatchRequest\x1a\x19.plc.EnqueueBatchResponse\x12L\n" +
 	"\x14SubscribeBatchStatus\x12\x1a.plc.SubscribeBatchRequest\x1a\x16.plc.BatchStatusUpdate0\x01\x12D\n" +
-	"\x12ConfirmBatchStatus\x12\x18.plc.ConfirmBatchRequest\x1a\x14.plc.CommandResponseB\"Z go_auto_ddr_clp/gen/plc/v1;plcv1b\x06proto3"
+	"\x12ConfirmBatchStatus\x12\x18.plc.ConfirmBatchRequest\x1a\x14.plc.CommandResponse\x12I\n" +
+	"\x0fGetFeederStatus\x12\x1b.plc.GetFeederStatusRequest\x1a\x19.plc.FeederStatusSnapshot\x12U\n" +
+	"\x15SubscribeFeederStatus\x12!.plc.SubscribeFeederStatusRequest\x1a\x17.plc.FeederStatusUpdate0\x01B\"Z go_auto_ddr_clp/gen/plc/v1;plcv1b\x06proto3"
 
 var (
 	file_proto_plc_v1_plc_proto_rawDescOnce sync.Once
@@ -1410,30 +1672,35 @@ func file_proto_plc_v1_plc_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_plc_v1_plc_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_plc_v1_plc_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_proto_plc_v1_plc_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_proto_plc_v1_plc_proto_goTypes = []any{
-	(BatchState)(0),               // 0: plc.BatchState
-	(*StartRequest)(nil),          // 1: plc.StartRequest
-	(*StopRequest)(nil),           // 2: plc.StopRequest
-	(*ResetRequest)(nil),          // 3: plc.ResetRequest
-	(*CommandResponse)(nil),       // 4: plc.CommandResponse
-	(*TagValue)(nil),              // 5: plc.TagValue
-	(*ReadTagRequest)(nil),        // 6: plc.ReadTagRequest
-	(*ReadTagResponse)(nil),       // 7: plc.ReadTagResponse
-	(*WriteTagRequest)(nil),       // 8: plc.WriteTagRequest
-	(*GetStatusRequest)(nil),      // 9: plc.GetStatusRequest
-	(*StatusResponse)(nil),        // 10: plc.StatusResponse
-	(*HealthcheckRequest)(nil),    // 11: plc.HealthcheckRequest
-	(*HealthcheckResponse)(nil),   // 12: plc.HealthcheckResponse
-	(*SubscribeTagsRequest)(nil),  // 13: plc.SubscribeTagsRequest
-	(*TagUpdate)(nil),             // 14: plc.TagUpdate
-	(*TComandoMsg)(nil),           // 15: plc.TComandoMsg
-	(*EnqueueBatchRequest)(nil),   // 16: plc.EnqueueBatchRequest
-	(*EnqueueBatchResponse)(nil),  // 17: plc.EnqueueBatchResponse
-	(*ItemStatusMsg)(nil),         // 18: plc.ItemStatusMsg
-	(*BatchStatusUpdate)(nil),     // 19: plc.BatchStatusUpdate
-	(*SubscribeBatchRequest)(nil), // 20: plc.SubscribeBatchRequest
-	(*ConfirmBatchRequest)(nil),   // 21: plc.ConfirmBatchRequest
+	(BatchState)(0),                      // 0: plc.BatchState
+	(*StartRequest)(nil),                 // 1: plc.StartRequest
+	(*StopRequest)(nil),                  // 2: plc.StopRequest
+	(*ResetRequest)(nil),                 // 3: plc.ResetRequest
+	(*CommandResponse)(nil),              // 4: plc.CommandResponse
+	(*TagValue)(nil),                     // 5: plc.TagValue
+	(*ReadTagRequest)(nil),               // 6: plc.ReadTagRequest
+	(*ReadTagResponse)(nil),              // 7: plc.ReadTagResponse
+	(*WriteTagRequest)(nil),              // 8: plc.WriteTagRequest
+	(*GetStatusRequest)(nil),             // 9: plc.GetStatusRequest
+	(*StatusResponse)(nil),               // 10: plc.StatusResponse
+	(*HealthcheckRequest)(nil),           // 11: plc.HealthcheckRequest
+	(*HealthcheckResponse)(nil),          // 12: plc.HealthcheckResponse
+	(*SubscribeTagsRequest)(nil),         // 13: plc.SubscribeTagsRequest
+	(*TagUpdate)(nil),                    // 14: plc.TagUpdate
+	(*TComandoMsg)(nil),                  // 15: plc.TComandoMsg
+	(*EnqueueBatchRequest)(nil),          // 16: plc.EnqueueBatchRequest
+	(*EnqueueBatchResponse)(nil),         // 17: plc.EnqueueBatchResponse
+	(*ItemStatusMsg)(nil),                // 18: plc.ItemStatusMsg
+	(*BatchStatusUpdate)(nil),            // 19: plc.BatchStatusUpdate
+	(*SubscribeBatchRequest)(nil),        // 20: plc.SubscribeBatchRequest
+	(*ConfirmBatchRequest)(nil),          // 21: plc.ConfirmBatchRequest
+	(*TrayPresence)(nil),                 // 22: plc.TrayPresence
+	(*GetFeederStatusRequest)(nil),       // 23: plc.GetFeederStatusRequest
+	(*FeederStatusSnapshot)(nil),         // 24: plc.FeederStatusSnapshot
+	(*SubscribeFeederStatusRequest)(nil), // 25: plc.SubscribeFeederStatusRequest
+	(*FeederStatusUpdate)(nil),           // 26: plc.FeederStatusUpdate
 }
 var file_proto_plc_v1_plc_proto_depIdxs = []int32{
 	5,  // 0: plc.ReadTagResponse.value:type_name -> plc.TagValue
@@ -1442,33 +1709,39 @@ var file_proto_plc_v1_plc_proto_depIdxs = []int32{
 	15, // 3: plc.EnqueueBatchRequest.items:type_name -> plc.TComandoMsg
 	0,  // 4: plc.BatchStatusUpdate.state:type_name -> plc.BatchState
 	18, // 5: plc.BatchStatusUpdate.items:type_name -> plc.ItemStatusMsg
-	1,  // 6: plc.PLCService.Start:input_type -> plc.StartRequest
-	2,  // 7: plc.PLCService.Stop:input_type -> plc.StopRequest
-	3,  // 8: plc.PLCService.Reset:input_type -> plc.ResetRequest
-	6,  // 9: plc.PLCService.ReadTag:input_type -> plc.ReadTagRequest
-	8,  // 10: plc.PLCService.WriteTag:input_type -> plc.WriteTagRequest
-	9,  // 11: plc.PLCService.GetStatus:input_type -> plc.GetStatusRequest
-	11, // 12: plc.PLCService.Healthcheck:input_type -> plc.HealthcheckRequest
-	13, // 13: plc.PLCService.SubscribeTags:input_type -> plc.SubscribeTagsRequest
-	16, // 14: plc.PLCService.EnqueueBatch:input_type -> plc.EnqueueBatchRequest
-	20, // 15: plc.PLCService.SubscribeBatchStatus:input_type -> plc.SubscribeBatchRequest
-	21, // 16: plc.PLCService.ConfirmBatchStatus:input_type -> plc.ConfirmBatchRequest
-	4,  // 17: plc.PLCService.Start:output_type -> plc.CommandResponse
-	4,  // 18: plc.PLCService.Stop:output_type -> plc.CommandResponse
-	4,  // 19: plc.PLCService.Reset:output_type -> plc.CommandResponse
-	7,  // 20: plc.PLCService.ReadTag:output_type -> plc.ReadTagResponse
-	4,  // 21: plc.PLCService.WriteTag:output_type -> plc.CommandResponse
-	10, // 22: plc.PLCService.GetStatus:output_type -> plc.StatusResponse
-	12, // 23: plc.PLCService.Healthcheck:output_type -> plc.HealthcheckResponse
-	14, // 24: plc.PLCService.SubscribeTags:output_type -> plc.TagUpdate
-	17, // 25: plc.PLCService.EnqueueBatch:output_type -> plc.EnqueueBatchResponse
-	19, // 26: plc.PLCService.SubscribeBatchStatus:output_type -> plc.BatchStatusUpdate
-	4,  // 27: plc.PLCService.ConfirmBatchStatus:output_type -> plc.CommandResponse
-	17, // [17:28] is the sub-list for method output_type
-	6,  // [6:17] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	26, // 6: plc.FeederStatusSnapshot.robots:type_name -> plc.FeederStatusUpdate
+	22, // 7: plc.FeederStatusUpdate.trays:type_name -> plc.TrayPresence
+	1,  // 8: plc.PLCService.Start:input_type -> plc.StartRequest
+	2,  // 9: plc.PLCService.Stop:input_type -> plc.StopRequest
+	3,  // 10: plc.PLCService.Reset:input_type -> plc.ResetRequest
+	6,  // 11: plc.PLCService.ReadTag:input_type -> plc.ReadTagRequest
+	8,  // 12: plc.PLCService.WriteTag:input_type -> plc.WriteTagRequest
+	9,  // 13: plc.PLCService.GetStatus:input_type -> plc.GetStatusRequest
+	11, // 14: plc.PLCService.Healthcheck:input_type -> plc.HealthcheckRequest
+	13, // 15: plc.PLCService.SubscribeTags:input_type -> plc.SubscribeTagsRequest
+	16, // 16: plc.PLCService.EnqueueBatch:input_type -> plc.EnqueueBatchRequest
+	20, // 17: plc.PLCService.SubscribeBatchStatus:input_type -> plc.SubscribeBatchRequest
+	21, // 18: plc.PLCService.ConfirmBatchStatus:input_type -> plc.ConfirmBatchRequest
+	23, // 19: plc.PLCService.GetFeederStatus:input_type -> plc.GetFeederStatusRequest
+	25, // 20: plc.PLCService.SubscribeFeederStatus:input_type -> plc.SubscribeFeederStatusRequest
+	4,  // 21: plc.PLCService.Start:output_type -> plc.CommandResponse
+	4,  // 22: plc.PLCService.Stop:output_type -> plc.CommandResponse
+	4,  // 23: plc.PLCService.Reset:output_type -> plc.CommandResponse
+	7,  // 24: plc.PLCService.ReadTag:output_type -> plc.ReadTagResponse
+	4,  // 25: plc.PLCService.WriteTag:output_type -> plc.CommandResponse
+	10, // 26: plc.PLCService.GetStatus:output_type -> plc.StatusResponse
+	12, // 27: plc.PLCService.Healthcheck:output_type -> plc.HealthcheckResponse
+	14, // 28: plc.PLCService.SubscribeTags:output_type -> plc.TagUpdate
+	17, // 29: plc.PLCService.EnqueueBatch:output_type -> plc.EnqueueBatchResponse
+	19, // 30: plc.PLCService.SubscribeBatchStatus:output_type -> plc.BatchStatusUpdate
+	4,  // 31: plc.PLCService.ConfirmBatchStatus:output_type -> plc.CommandResponse
+	24, // 32: plc.PLCService.GetFeederStatus:output_type -> plc.FeederStatusSnapshot
+	26, // 33: plc.PLCService.SubscribeFeederStatus:output_type -> plc.FeederStatusUpdate
+	21, // [21:34] is the sub-list for method output_type
+	8,  // [8:21] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_proto_plc_v1_plc_proto_init() }
@@ -1489,7 +1762,7 @@ func file_proto_plc_v1_plc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_plc_v1_plc_proto_rawDesc), len(file_proto_plc_v1_plc_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   21,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
