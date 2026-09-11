@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,12 +31,36 @@ func NewMock() *Mock {
 	if max < min {
 		max = min
 	}
-	return &Mock{
+	m := &Mock{
 		tags:        make(map[string]TagValue),
 		structs:     make(map[string][]byte),
 		status:      Status{Mode: "PROGRAM"},
 		actionMinMS: min,
 		actionMaxMS: max,
+	}
+	m.seedFeederFromEnv(os.Getenv("CLP_MOCK_FEEDER_PRESENT"))
+	return m
+}
+
+// seedFeederFromEnv semeia bandejas presentes a partir de CLP_MOCK_FEEDER_PRESENT
+// (formato "robô:estande:bandeja" separado por vírgula, ex. "1:2:1,1:2:2"). Sem o
+// seed toda posição nasce ausente (ReadTag de tag desconhecida devolve zero), o que
+// obrigaria o harness a escrever as tags via WriteTag antes de o backend assinar —
+// o env evita essa corrida de ordem de subida. Entradas malformadas são ignoradas.
+func (m *Mock) seedFeederFromEnv(spec string) {
+	for _, entry := range strings.Split(spec, ",") {
+		parts := strings.Split(strings.TrimSpace(entry), ":")
+		if len(parts) != 3 {
+			continue
+		}
+		robot, err1 := strconv.Atoi(parts[0])
+		estande, err2 := strconv.Atoi(parts[1])
+		bandeja, err3 := strconv.Atoi(parts[2])
+		if err1 != nil || err2 != nil || err3 != nil {
+			continue
+		}
+		tag := TagBandejaPresenteMember(int32(robot), int32(estande), int32(bandeja))
+		m.tags[tag] = TagValue{Kind: KindBool, Bool: true}
 	}
 }
 

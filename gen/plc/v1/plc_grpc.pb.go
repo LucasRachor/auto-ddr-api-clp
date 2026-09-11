@@ -19,17 +19,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PLCService_Start_FullMethodName                = "/plc.PLCService/Start"
-	PLCService_Stop_FullMethodName                 = "/plc.PLCService/Stop"
-	PLCService_Reset_FullMethodName                = "/plc.PLCService/Reset"
-	PLCService_ReadTag_FullMethodName              = "/plc.PLCService/ReadTag"
-	PLCService_WriteTag_FullMethodName             = "/plc.PLCService/WriteTag"
-	PLCService_GetStatus_FullMethodName            = "/plc.PLCService/GetStatus"
-	PLCService_Healthcheck_FullMethodName          = "/plc.PLCService/Healthcheck"
-	PLCService_SubscribeTags_FullMethodName        = "/plc.PLCService/SubscribeTags"
-	PLCService_EnqueueBatch_FullMethodName         = "/plc.PLCService/EnqueueBatch"
-	PLCService_SubscribeBatchStatus_FullMethodName = "/plc.PLCService/SubscribeBatchStatus"
-	PLCService_ConfirmBatchStatus_FullMethodName   = "/plc.PLCService/ConfirmBatchStatus"
+	PLCService_Start_FullMethodName                 = "/plc.PLCService/Start"
+	PLCService_Stop_FullMethodName                  = "/plc.PLCService/Stop"
+	PLCService_Reset_FullMethodName                 = "/plc.PLCService/Reset"
+	PLCService_ReadTag_FullMethodName               = "/plc.PLCService/ReadTag"
+	PLCService_WriteTag_FullMethodName              = "/plc.PLCService/WriteTag"
+	PLCService_GetStatus_FullMethodName             = "/plc.PLCService/GetStatus"
+	PLCService_Healthcheck_FullMethodName           = "/plc.PLCService/Healthcheck"
+	PLCService_SubscribeTags_FullMethodName         = "/plc.PLCService/SubscribeTags"
+	PLCService_EnqueueBatch_FullMethodName          = "/plc.PLCService/EnqueueBatch"
+	PLCService_SubscribeBatchStatus_FullMethodName  = "/plc.PLCService/SubscribeBatchStatus"
+	PLCService_ConfirmBatchStatus_FullMethodName    = "/plc.PLCService/ConfirmBatchStatus"
+	PLCService_GetFeederStatus_FullMethodName       = "/plc.PLCService/GetFeederStatus"
+	PLCService_SubscribeFeederStatus_FullMethodName = "/plc.PLCService/SubscribeFeederStatus"
 )
 
 // PLCServiceClient is the client API for PLCService service.
@@ -48,6 +50,13 @@ type PLCServiceClient interface {
 	EnqueueBatch(ctx context.Context, in *EnqueueBatchRequest, opts ...grpc.CallOption) (*EnqueueBatchResponse, error)
 	SubscribeBatchStatus(ctx context.Context, in *SubscribeBatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BatchStatusUpdate], error)
 	ConfirmBatchStatus(ctx context.Context, in *ConfirmBatchRequest, opts ...grpc.CallOption) (*CommandResponse, error)
+	// ---- Presença de bandeja (gBandejaPresente/TStatusAlimentador) ----
+	// CLP -> Software sem handshake: o CLP mantém as 8 posições sempre atualizadas
+	// pelos sensores; a API polla e emite on-change. Cada update carrega o snapshot
+	// COMPLETO do robô (nunca delta) e o stream envia um frame inicial ao assinar —
+	// o consumidor reconcilia tudo em qualquer reconexão, sem Get de bootstrap.
+	GetFeederStatus(ctx context.Context, in *GetFeederStatusRequest, opts ...grpc.CallOption) (*FeederStatusSnapshot, error)
+	SubscribeFeederStatus(ctx context.Context, in *SubscribeFeederStatusRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FeederStatusUpdate], error)
 }
 
 type pLCServiceClient struct {
@@ -186,6 +195,35 @@ func (c *pLCServiceClient) ConfirmBatchStatus(ctx context.Context, in *ConfirmBa
 	return out, nil
 }
 
+func (c *pLCServiceClient) GetFeederStatus(ctx context.Context, in *GetFeederStatusRequest, opts ...grpc.CallOption) (*FeederStatusSnapshot, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FeederStatusSnapshot)
+	err := c.cc.Invoke(ctx, PLCService_GetFeederStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pLCServiceClient) SubscribeFeederStatus(ctx context.Context, in *SubscribeFeederStatusRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FeederStatusUpdate], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PLCService_ServiceDesc.Streams[2], PLCService_SubscribeFeederStatus_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SubscribeFeederStatusRequest, FeederStatusUpdate]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PLCService_SubscribeFeederStatusClient = grpc.ServerStreamingClient[FeederStatusUpdate]
+
 // PLCServiceServer is the server API for PLCService service.
 // All implementations must embed UnimplementedPLCServiceServer
 // for forward compatibility.
@@ -202,6 +240,13 @@ type PLCServiceServer interface {
 	EnqueueBatch(context.Context, *EnqueueBatchRequest) (*EnqueueBatchResponse, error)
 	SubscribeBatchStatus(*SubscribeBatchRequest, grpc.ServerStreamingServer[BatchStatusUpdate]) error
 	ConfirmBatchStatus(context.Context, *ConfirmBatchRequest) (*CommandResponse, error)
+	// ---- Presença de bandeja (gBandejaPresente/TStatusAlimentador) ----
+	// CLP -> Software sem handshake: o CLP mantém as 8 posições sempre atualizadas
+	// pelos sensores; a API polla e emite on-change. Cada update carrega o snapshot
+	// COMPLETO do robô (nunca delta) e o stream envia um frame inicial ao assinar —
+	// o consumidor reconcilia tudo em qualquer reconexão, sem Get de bootstrap.
+	GetFeederStatus(context.Context, *GetFeederStatusRequest) (*FeederStatusSnapshot, error)
+	SubscribeFeederStatus(*SubscribeFeederStatusRequest, grpc.ServerStreamingServer[FeederStatusUpdate]) error
 	mustEmbedUnimplementedPLCServiceServer()
 }
 
@@ -244,6 +289,12 @@ func (UnimplementedPLCServiceServer) SubscribeBatchStatus(*SubscribeBatchRequest
 }
 func (UnimplementedPLCServiceServer) ConfirmBatchStatus(context.Context, *ConfirmBatchRequest) (*CommandResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConfirmBatchStatus not implemented")
+}
+func (UnimplementedPLCServiceServer) GetFeederStatus(context.Context, *GetFeederStatusRequest) (*FeederStatusSnapshot, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetFeederStatus not implemented")
+}
+func (UnimplementedPLCServiceServer) SubscribeFeederStatus(*SubscribeFeederStatusRequest, grpc.ServerStreamingServer[FeederStatusUpdate]) error {
+	return status.Error(codes.Unimplemented, "method SubscribeFeederStatus not implemented")
 }
 func (UnimplementedPLCServiceServer) mustEmbedUnimplementedPLCServiceServer() {}
 func (UnimplementedPLCServiceServer) testEmbeddedByValue()                    {}
@@ -450,6 +501,35 @@ func _PLCService_ConfirmBatchStatus_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PLCService_GetFeederStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFeederStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PLCServiceServer).GetFeederStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PLCService_GetFeederStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PLCServiceServer).GetFeederStatus(ctx, req.(*GetFeederStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PLCService_SubscribeFeederStatus_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SubscribeFeederStatusRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(PLCServiceServer).SubscribeFeederStatus(m, &grpc.GenericServerStream[SubscribeFeederStatusRequest, FeederStatusUpdate]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PLCService_SubscribeFeederStatusServer = grpc.ServerStreamingServer[FeederStatusUpdate]
+
 // PLCService_ServiceDesc is the grpc.ServiceDesc for PLCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -493,6 +573,10 @@ var PLCService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ConfirmBatchStatus",
 			Handler:    _PLCService_ConfirmBatchStatus_Handler,
 		},
+		{
+			MethodName: "GetFeederStatus",
+			Handler:    _PLCService_GetFeederStatus_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -503,6 +587,11 @@ var PLCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "SubscribeBatchStatus",
 			Handler:       _PLCService_SubscribeBatchStatus_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "SubscribeFeederStatus",
+			Handler:       _PLCService_SubscribeFeederStatus_Handler,
 			ServerStreams: true,
 		},
 	},
