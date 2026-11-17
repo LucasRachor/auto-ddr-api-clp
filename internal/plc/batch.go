@@ -11,7 +11,7 @@ import (
 // está em internal/queue/dispatcher.go; o layout do UDT, em docs/mudancas-batch.md.
 //
 //	API -> CLP: gLote_RoboN (ARRAY[1..5] OF TComando), gLote_Id_RoboN (DINT),
-//	            gLote_Qtd_RoboN (INT), gLote_Req_RoboN (BOOL)
+//	            gLote_Acao_RoboN (INT), gLote_Qtd_RoboN (INT), gLote_Req_RoboN (BOOL)
 //	CLP -> API: gLote_Start_RoboN (BOOL), gLote_Ack_RoboN (BOOL) e o membro
 //	            .status de cada elemento de gLote_RoboN
 const (
@@ -19,8 +19,11 @@ const (
 	// O lote sempre vai completo no frame: os itens além de Qtd são zeros.
 	BatchSize = 5
 
-	// tcomandoBytes é o stride de um TComando: 11 membros INT × 2 bytes.
-	tcomandoBytes = 22
+	// tcomandoBytes é o stride de um TComando: 10 membros INT × 2 bytes. A ação
+	// NÃO é membro do item: é a variável de lote gLote_Acao_RoboN
+	// (clp-software.md §TComando). Mandar 22 bytes por item é recusado pelo NX1P2
+	// com GeneralStatus=0x1F addStatus=0102 (tamanho dos dados ≠ tamanho da tag).
+	tcomandoBytes = 20
 )
 
 // Status de um item do lote, gravado pelo CLP em gLote_RoboN[i].status.
@@ -36,6 +39,7 @@ var Robots = []int32{1, 2}
 
 func TagLote(robot int32) string      { return fmt.Sprintf("gLote_Robo%d", robot) }
 func TagLoteId(robot int32) string    { return fmt.Sprintf("gLote_Id_Robo%d", robot) }
+func TagLoteAcao(robot int32) string  { return fmt.Sprintf("gLote_Acao_Robo%d", robot) }
 func TagLoteQtd(robot int32) string   { return fmt.Sprintf("gLote_Qtd_Robo%d", robot) }
 func TagLoteReq(robot int32) string   { return fmt.Sprintf("gLote_Req_Robo%d", robot) }
 func TagLoteStart(robot int32) string { return fmt.Sprintf("gLote_Start_Robo%d", robot) }
@@ -73,8 +77,8 @@ func NormalizeSerial(s string) string {
 // BatchItem é um elemento do UDT TComando. Os campos não aplicáveis à ação do
 // lote vão zerados (a validação em internal/queue/action.go garante isso).
 // O membro .status não está aqui: quem o grava é o CLP, e a API sempre envia 0.
+// A ação não está aqui porque não é membro do item: vai em gLote_Acao_RoboN.
 type BatchItem struct {
-	Acao    int32
 	Dedo    int32
 	Dedo2   int32
 	Estande int32
@@ -89,7 +93,7 @@ type BatchItem struct {
 // EncodeBatch serializa os itens no packing do UDT TComando para WriteStructRaw:
 // BatchSize elementos de tcomandoBytes bytes, todos os membros INT em
 // little-endian, na ordem exata da declaração
-// (acao, dedo, dedo_2, estande, bandeja, fileira, coluna, rack, placa, slot, status).
+// (dedo, dedo_2, estande, bandeja, fileira, coluna, rack, placa, slot, status).
 //
 // items é indexado por posição (items[0] = gLote_RoboN[1]); posições além das
 // preenchidas vão zeradas, assim como o .status de todos os elementos.
@@ -100,9 +104,8 @@ func EncodeBatch(items []BatchItem) ([]byte, error) {
 	data := make([]byte, BatchSize*tcomandoBytes)
 	for i, it := range items {
 		members := [...]int32{
-			it.Acao, it.Dedo, it.Dedo2, it.Estande, it.Bandeja,
-			it.Fileira, it.Coluna, it.Rack, it.Placa, it.Slot,
-			ItemStatusPending,
+			it.Dedo, it.Dedo2, it.Estande, it.Bandeja, it.Fileira,
+			it.Coluna, it.Rack, it.Placa, it.Slot, ItemStatusPending,
 		}
 		off := i * tcomandoBytes
 		for j, m := range members {
@@ -126,8 +129,8 @@ func DecodeBatch(data []byte) ([]BatchItem, error) {
 			return int32(int16(binary.LittleEndian.Uint16(data[off+j*2:])))
 		}
 		items[i] = BatchItem{
-			Acao: m(0), Dedo: m(1), Dedo2: m(2), Estande: m(3), Bandeja: m(4),
-			Fileira: m(5), Coluna: m(6), Rack: m(7), Placa: m(8), Slot: m(9),
+			Dedo: m(0), Dedo2: m(1), Estande: m(2), Bandeja: m(3),
+			Fileira: m(4), Coluna: m(5), Rack: m(6), Placa: m(7), Slot: m(8),
 		}
 	}
 	return items, nil

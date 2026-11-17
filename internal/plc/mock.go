@@ -208,7 +208,7 @@ func (m *Mock) simulateSerials(robot int32, qtd int) {
 	}
 	acao := int32(1)
 	if qtd > 0 {
-		acao = items[0].Acao
+		acao = m.tags[TagLoteAcao(robot)].Int
 	}
 	for i := 0; i < qtd && i < len(items); i++ {
 		it := items[i]

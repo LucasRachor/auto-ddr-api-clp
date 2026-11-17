@@ -173,6 +173,9 @@ func runDirect(rec queue.Record, host string, idleTimeout, startTimeout, ackTime
 	if err := clp.WriteStructRaw(ctx, plc.TagLote(robot), data); err != nil {
 		return fail(fmt.Errorf("write %s: %w", plc.TagLote(robot), err))
 	}
+	if err := clp.WriteTag(ctx, plc.TagLoteAcao(robot), plc.TagValue{Kind: plc.KindInt, Int: rec.Acao}); err != nil {
+		return fail(fmt.Errorf("write %s: %w", plc.TagLoteAcao(robot), err))
+	}
 	if err := clp.WriteTag(ctx, plc.TagLoteQtd(robot), plc.TagValue{Kind: plc.KindInt, Int: rec.Qtd}); err != nil {
 		return fail(fmt.Errorf("write %s: %w", plc.TagLoteQtd(robot), err))
 	}
@@ -264,9 +267,10 @@ func printSlot(ctx context.Context, h handshake, robot int32) {
 		}
 		return fmt.Sprintf("%d", v)
 	}
-	fmt.Printf("slot do robô %d: Req=%s Start=%s Ack=%s Id=%s Qtd=%s\n", robot,
+	fmt.Printf("slot do robô %d: Req=%s Start=%s Ack=%s Id=%s Acao=%s Qtd=%s\n", robot,
 		read(plc.TagLoteReq(robot)), read(plc.TagLoteStart(robot)),
-		read(plc.TagLoteAck(robot)), read(plc.TagLoteId(robot)), read(plc.TagLoteQtd(robot)))
+		read(plc.TagLoteAck(robot)), read(plc.TagLoteId(robot)),
+		read(plc.TagLoteAcao(robot)), read(plc.TagLoteQtd(robot)))
 }
 
 // printSerials mostra gSerial_RoboN[1..5] como o dispatcher o entregaria ao Nest
@@ -381,12 +385,11 @@ func (h handshake) waitBool(ctx context.Context, tag string, want bool, timeout 
 }
 
 // toBatchItems posiciona os itens no array do CLP (índice 0 = gLote_RoboN[1]),
-// igual ao dispatcher: posições não usadas zeradas, ação homogênea do lote.
+// igual ao dispatcher: posições não usadas zeradas; a ação vai em gLote_Acao_RoboN.
 func toBatchItems(rec queue.Record) []plc.BatchItem {
 	out := make([]plc.BatchItem, plc.BatchSize)
 	for _, it := range rec.Items {
 		out[it.Position-1] = plc.BatchItem{
-			Acao:    rec.Acao,
 			Dedo:    it.Dedo,
 			Dedo2:   it.Dedo2,
 			Estande: it.Estande,

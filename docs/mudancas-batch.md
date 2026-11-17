@@ -76,15 +76,20 @@ Regenerar stubs (`protoc ...`) e religar em `internal/server/server.go` e
 Criar o UDT e as globais com **Network Publish = Publish Only** (base para o ladder
 de lote, equivalente ao de `gCmd` em [handshake-clp-sysmac.md](handshake-clp-sysmac.md)).
 
-**UDT `TComando`** (11 × INT, na ordem exata — importa para o packing):
+**UDT `TComando`** (10 × INT, na ordem exata — importa para o packing):
 
 | Membro | Tipo | Bytes |
 |--------|------|-------|
-| `acao` `dedo` `dedo_2` `estande` `bandeja` `fileira` `coluna` `rack` `placa` `slot` `status` | INT | 2 cada |
-| **total por elemento** | | **22** |
+| `dedo` `dedo_2` `estande` `bandeja` `fileira` `coluna` `rack` `placa` `slot` `status` | INT | 2 cada |
+| **total por elemento** | | **20** |
 
-`gLote_RoboN : ARRAY[1..5] OF TComando` → `2 (handle) + 5×22 = 112 bytes`.
+`gLote_RoboN : ARRAY[1..5] OF TComando` → `2 (handle) + 5×20 = 102 bytes`.
 Índice **base-1** (`gLote_Robo1[1]`). `status` é gravado pelo CLP (a API envia 0).
+
+> A ação **não** é membro do item: é a variável de lote `gLote_Acao_RoboN`
+> (clp-software.md §TComando), que existe mesmo com `Qtd=0`. Um frame de 22 bytes
+> por item (com `acao` dentro) é recusado com `GeneralStatus=0x1F addStatus=0102..`
+> — tamanho dos dados ≠ tamanho da tag.
 
 **Globais por robô (`N` = 1, 2):**
 
@@ -92,18 +97,19 @@ de lote, equivalente ao de `gCmd` em [handshake-clp-sysmac.md](handshake-clp-sys
 |-----|------|---------|-------|
 | `gLote_RoboN` | ARRAY[1..5] OF TComando | API→CLP | o lote (API escreve; CLP grava `status[i]`) |
 | `gLote_Id_RoboN` | DINT | API→CLP | id do lote (eco no ack) |
-| `gLote_Qtd_RoboN` | INT | API→CLP | itens válidos (1..5) |
+| `gLote_Acao_RoboN` | INT | API→CLP | ação do lote (1..6, homogênea) |
+| `gLote_Qtd_RoboN` | INT | API→CLP | itens válidos (0..5) |
 | `gLote_Req_RoboN` | BOOL | API→CLP | requisição pronta |
 | `gLote_Start_RoboN` | BOOL | CLP→API | CLP travou o lote / começou |
 | `gLote_Ack_RoboN` | BOOL | CLP→API | lote concluído (todos `status` gravados) |
 
 ### 3. Driver (`internal/plc/omron_nx1p2.go`)
 
-- **`WriteBatch(ctx, robot, req)`**: serializa os 5 elementos LE (22 bytes cada; itens
-  além de `qtd` = zeros; `status`=0; `acao` de cada item = `req.acao`) e escreve
-  `gLote_RoboN` via `WriteStructRaw` (frame único, `count=1`). Alternativa
-  campo-a-campo (`gLote_RoboN[i].campo`) escrevendo só os `qtd` válidos.
-- Escrever `gLote_Qtd_RoboN` e `gLote_Id_RoboN` (via `WriteValue`).
+- **`WriteBatch(ctx, robot, req)`**: serializa os 5 elementos LE (20 bytes cada; itens
+  além de `qtd` = zeros; `status`=0) e escreve `gLote_RoboN` via `WriteStructRaw`
+  (frame único, `count=1`). Alternativa campo-a-campo (`gLote_RoboN[i].campo`)
+  escrevendo só os `qtd` válidos.
+- Escrever `gLote_Acao_RoboN`, `gLote_Qtd_RoboN` e `gLote_Id_RoboN` (via `WriteValue`).
 - **`ReadBatchStatus(ctx, robot, qtd)`**: lê `gLote_RoboN[i].status` (i=1..qtd) — leitura
   por membro já suportada.
 - Constantes das tags parametrizadas por sufixo `_RoboN`.

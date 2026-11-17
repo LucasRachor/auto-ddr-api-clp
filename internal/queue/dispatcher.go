@@ -118,6 +118,11 @@ func (q *Queue) dispatch(ctx context.Context, rec Record) (ackResult, error) {
 	if err := q.plc.WriteStructRaw(ctx, plc.TagLote(robot), data); err != nil {
 		return ackResult{}, fmt.Errorf("write %s: %w", plc.TagLote(robot), err)
 	}
+	// A ação é variável do lote, não dos itens: é o que permite ao CLP saber o tipo
+	// de um lote vazio (Qtd=0, ex.: coleta só para centralizar passageira).
+	if err := q.writeTag(ctx, plc.TagLoteAcao(robot), plc.TagValue{Kind: plc.KindInt, Int: rec.Acao}); err != nil {
+		return ackResult{}, err
+	}
 	if err := q.writeTag(ctx, plc.TagLoteQtd(robot), plc.TagValue{Kind: plc.KindInt, Int: rec.Qtd}); err != nil {
 		return ackResult{}, err
 	}
@@ -233,13 +238,12 @@ func classify(items []Item) (State, string) {
 }
 
 // toBatchItems posiciona os itens no array do CLP (índice 0 = gLote_RoboN[1]). As
-// posições não usadas ficam zeradas e todos os itens levam a ação do lote, que é
-// homogêneo. Validate já garantiu Position em 1..Qtd.
+// posições não usadas ficam zeradas. A ação do lote (homogênea) vai à parte, em
+// gLote_Acao_RoboN. Validate já garantiu Position em 1..Qtd.
 func toBatchItems(rec Record) []plc.BatchItem {
 	out := make([]plc.BatchItem, plc.BatchSize)
 	for _, it := range rec.Items {
 		out[it.Position-1] = plc.BatchItem{
-			Acao:    rec.Acao,
 			Dedo:    it.Dedo,
 			Dedo2:   it.Dedo2,
 			Estande: it.Estande,
