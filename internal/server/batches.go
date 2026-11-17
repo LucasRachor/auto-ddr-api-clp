@@ -103,6 +103,12 @@ func toBatchUpdate(rec queue.Record) *pb.BatchStatusUpdate {
 	for _, it := range rec.Items {
 		items = append(items, &pb.ItemStatusMsg{Position: it.Position, Status: it.Status})
 	}
+	// Serials só vem em lote de coleta (ver queue.readAck); nos demais fica vazio e
+	// o Nest não tem o que vincular.
+	serials := make([]*pb.FingerSerialMsg, 0, len(rec.Serials))
+	for _, fs := range rec.Serials {
+		serials = append(serials, &pb.FingerSerialMsg{Dedo: fs.Dedo, Serial: fs.Serial})
+	}
 	return &pb.BatchStatusUpdate{
 		BatchId:  int32(rec.BatchID),
 		Robot:    rec.Robot,
@@ -110,6 +116,7 @@ func toBatchUpdate(rec queue.Record) *pb.BatchStatusUpdate {
 		Items:    items,
 		Detail:   rec.Detail,
 		TsUnixMs: rec.UpdatedAt,
+		Serials:  serials,
 	}
 }
 

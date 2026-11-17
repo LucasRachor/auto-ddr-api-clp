@@ -30,7 +30,7 @@ func startServer(t *testing.T) pb.PLCServiceClient {
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	clp := plc.NewMock()
-	q := queue.New(store, clp, log, queue.Config{AckTimeout: time.Second, PollEvery: 5 * time.Millisecond})
+	q := queue.New(store, clp, log, queue.Config{AckTimeout: time.Second, PollEvery: 5 * time.Millisecond, ReadSerials: true})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -143,6 +143,59 @@ func TestEndToEnd_DuplicateBatchIdIsFlagged(t *testing.T) {
 	}
 	if !second.GetDuplicate() {
 		t.Fatal("duplicate = false ao reusar (robot, batch_id), esperava true")
+	}
+}
+
+// Com CLP_MOCK_SERIAL=1 o mock emula o leitor: a coleta chega ao Nest com os 5
+// serials, preenchidos nos dedos do lote e vazios nos demais.
+func TestEndToEnd_ColetaCarriesSerials(t *testing.T) {
+	t.Setenv("CLP_MOCK_SERIAL", "1")
+	client := startServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := client.SubscribeBatchStatus(ctx, &pb.SubscribeBatchRequest{})
+	if err != nil {
+		t.Fatalf("SubscribeBatchStatus: %v", err)
+	}
+	resp, err := client.EnqueueBatch(ctx, &pb.EnqueueBatchRequest{
+		BatchId: 601, Robot: 1, Acao: 1, Qtd: 2,
+		Items: []*pb.TComandoMsg{
+			{Position: 1, Dedo: 2, Estande: 1, Bandeja: 1, Fileira: 1, Coluna: 1},
+			{Position: 2, Dedo: 5, Estande: 1, Bandeja: 1, Fileira: 1, Coluna: 2},
+		},
+	})
+	if err != nil || !resp.GetAccepted() {
+		t.Fatalf("EnqueueBatch: err=%v accepted=%v (%s)", err, resp.GetAccepted(), resp.GetMessage())
+	}
+
+	for {
+		upd, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("stream.Recv: %v", err)
+		}
+		if upd.GetBatchId() != 601 {
+			continue
+		}
+		switch upd.GetState() {
+		case pb.BatchState_BQ_ACKED_OK:
+			serials := upd.GetSerials()
+			if len(serials) != plc.BatchSize {
+				t.Fatalf("serials = %d, esperava %d", len(serials), plc.BatchSize)
+			}
+			for _, fs := range serials {
+				filled := fs.GetDedo() == 2 || fs.GetDedo() == 5
+				if filled && len(fs.GetSerial()) != 18 {
+					t.Errorf("dedo %d: serial %q, esperava 18 caracteres", fs.GetDedo(), fs.GetSerial())
+				}
+				if !filled && fs.GetSerial() != "" {
+					t.Errorf("dedo %d: serial %q, esperava vazio (dedo fora do lote)", fs.GetDedo(), fs.GetSerial())
+				}
+			}
+			return
+		case pb.BatchState_BQ_ACKED_ERROR, pb.BatchState_BQ_FAILED:
+			t.Fatalf("estado terminal inesperado: %v (%s)", upd.GetState(), upd.GetDetail())
+		}
 	}
 }
 

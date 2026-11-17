@@ -230,6 +230,11 @@ func runDirect(rec queue.Record, host string, idleTimeout, startTimeout, ackTime
 			allOK = false
 		}
 	}
+	// Em coleta a centralização já rodou: gSerial está válido. Best-effort, como
+	// no dispatcher — erro de leitura não invalida o ack.
+	if rec.Acao == 1 {
+		printSerials(ctx, clp, robot)
+	}
 
 	// 7. Confirma o recebimento e espera o CLP liberar o slot (best-effort).
 	if err := h.writeBool(ctx, plc.TagLoteReq(robot), false); err != nil {
@@ -264,6 +269,23 @@ func printSlot(ctx context.Context, h handshake, robot int32) {
 		read(plc.TagLoteAck(robot)), read(plc.TagLoteId(robot)), read(plc.TagLoteQtd(robot)))
 }
 
+// printSerials mostra gSerial_RoboN[1..5] como o dispatcher o entregaria ao Nest
+// (já normalizado) e o valor cru, para conferir comprimento/padding na bancada.
+func printSerials(ctx context.Context, clp plc.Client, robot int32) {
+	for dedo := 1; dedo <= plc.BatchSize; dedo++ {
+		tag := plc.TagSerial(robot, dedo)
+		v, err := clp.ReadTag(ctx, tag)
+		switch {
+		case err != nil:
+			fmt.Printf("  %s = ? (%v)\n", tag, err)
+		case v.Kind != plc.KindString:
+			fmt.Printf("  %s = ? (kind %d, esperava STRING)\n", tag, v.Kind)
+		default:
+			fmt.Printf("  %s = %q (cru: %q, %d bytes)\n", tag, plc.NormalizeSerial(v.String), v.String, len(v.String))
+		}
+	}
+}
+
 // runStatus (-status): conecta, mostra o slot e o .status de cada item, e sai
 // sem escrever NADA no CLP. Retorna false só em falha de conexão.
 func runStatus(host string, robot int32) bool {
@@ -293,6 +315,8 @@ func runStatus(host string, robot int32) bool {
 		fmt.Printf("  gLote[%d].status = %d\n", i, st)
 	}
 	fmt.Println("(0=pendente, 1=ok, 2=erro; Start=1 sem Ack = lote travado executando/em falha)")
+	printSerials(ctx, clp, robot)
+	fmt.Println("(gSerial só é atualizado pela centralização após coleta; fora disso é resíduo)")
 	return true
 }
 
@@ -432,6 +456,9 @@ func runGRPC(rec queue.Record, addr string, timeout time.Duration) bool {
 		case pb.BatchState_BQ_ACKED_OK, pb.BatchState_BQ_ACKED_ERROR, pb.BatchState_BQ_FAILED:
 			for _, st := range up.GetItems() {
 				fmt.Printf("  gLote[%d].status = %d\n", st.GetPosition(), st.GetStatus())
+			}
+			for _, fs := range up.GetSerials() {
+				fmt.Printf("  gSerial[%d] = %q\n", fs.GetDedo(), fs.GetSerial())
 			}
 			// Tira o lote do replay de reconexões — teste de bancada não deve
 			// deixar pendência para o assinante do Nest.

@@ -127,6 +127,16 @@ message ItemStatusMsg {
   int32 status   = 2; // 0=pendente, 1=ok, 2=erro
 }
 
+// Serial lido pelo leitor de código na centralização, indexado pelo dedo da garra
+// (gSerial_RoboN[dedo], ARRAY[1..5] OF STRING[32]). Só vem preenchido — sempre as
+// 5 entradas, dedos 1..5 — em lote de acao=1 (coleta, inclusive qtd=0); vazio nos
+// demais, onde o conteúdo da tag é resíduo. serial="" = dedo vazio OU falha de
+// leitura: quem distingue é o backend, pelo que acredita estar em cada dedo.
+message FingerSerialMsg {
+  int32  dedo   = 1; // 1..5
+  string serial = 2;
+}
+
 message BatchStatusUpdate {
   int32                batch_id   = 1;
   int32                robot      = 2;
@@ -134,6 +144,7 @@ message BatchStatusUpdate {
   repeated ItemStatusMsg items    = 4;
   string               detail     = 5;
   int64                ts_unix_ms = 6;
+  repeated FingerSerialMsg serials = 7;
 }
 
 message SubscribeBatchRequest {}

@@ -39,21 +39,32 @@ type Item struct {
 	Status   int32 `json:"status"`
 }
 
+// FingerSerial é gSerial_RoboN[Dedo] lido no ack de um lote de coleta: o serial
+// que o leitor gravou para a memória daquele dedo na centralização.
+type FingerSerial struct {
+	Dedo   int32  `json:"dedo"`   // 1..5
+	Serial string `json:"serial"` // "" = dedo vazio OU falha de leitura (o backend decide)
+}
+
 // Record é o registro durável de um lote. Persistido como JSON no bbolt,
 // chaveado por (Robot, BatchID) — cada robô tem um slot independente no CLP.
 type Record struct {
-	BatchID    int64  `json:"batch_id"` // gLote_Id, fornecido pelo Nest (cabe em DINT)
-	Robot      int32  `json:"robot"`    // 1..2 -> _Robo1/_Robo2
-	Acao       int32  `json:"acao"`     // 1..5 — lote homogêneo
-	Qtd        int32  `json:"qtd"`      // itens válidos (1..5)
-	Items      []Item `json:"items"`
-	State      State  `json:"state"`
-	Detail     string `json:"detail"`
-	Attempts   int    `json:"attempts"`
-	Seq        uint64 `json:"seq"` // ordem FIFO de chegada
-	EnqueuedAt int64  `json:"enqueued_at"`
-	UpdatedAt  int64  `json:"updated_at"`
-	Delivered  bool   `json:"delivered"` // status confirmado pelo Nest (ConfirmBatchStatus)
+	BatchID int64  `json:"batch_id"` // gLote_Id, fornecido pelo Nest (cabe em DINT)
+	Robot   int32  `json:"robot"`    // 1..2 -> _Robo1/_Robo2
+	Acao    int32  `json:"acao"`     // 1..5 — lote homogêneo
+	Qtd     int32  `json:"qtd"`      // itens válidos (0..5; 0 só na coleta)
+	Items   []Item `json:"items"`
+	// Serials só existe em lote de Acao=1 com a leitura ligada (Config.ReadSerials):
+	// sempre as 5 entradas, dedos 1..5. omitempty mantém os registros antigos do
+	// bbolt válidos.
+	Serials    []FingerSerial `json:"serials,omitempty"`
+	State      State          `json:"state"`
+	Detail     string         `json:"detail"`
+	Attempts   int            `json:"attempts"`
+	Seq        uint64         `json:"seq"` // ordem FIFO de chegada
+	EnqueuedAt int64          `json:"enqueued_at"`
+	UpdatedAt  int64          `json:"updated_at"`
+	Delivered  bool           `json:"delivered"` // status confirmado pelo Nest (ConfirmBatchStatus)
 }
 
 var (

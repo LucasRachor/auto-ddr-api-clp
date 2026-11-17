@@ -56,3 +56,63 @@ func TestTagNames(t *testing.T) {
 		}
 	}
 }
+
+func TestTagSerial(t *testing.T) {
+	if got := TagSerial(1, 3); got != "gSerial_Robo1[3]" {
+		t.Errorf("TagSerial(1,3) = %q, esperava gSerial_Robo1[3]", got)
+	}
+	if got := TagSerial(2, 5); got != "gSerial_Robo2[5]" {
+		t.Errorf("TagSerial(2,5) = %q, esperava gSerial_Robo2[5]", got)
+	}
+}
+
+// O leitor preenche com NUL e o CLP pode deixar espaço; lixo com caractere de
+// controle vira vazio (memória anônima) em vez de ser ligado a alguém.
+func TestNormalizeSerial(t *testing.T) {
+	cases := map[string]string{
+		"8F9407260600477159": "8F9407260600477159",
+		"ABC\x00\x00\x00":    "ABC",
+		"  X ":               "X",
+		"\x00":               "",
+		"":                   "",
+		"A\x01B":             "",
+		"\x00\x00SN12\r\n":   "SN12",
+		"0000000000":         "0000000000", // "0" (48) não é NUL (0)
+	}
+	for in, want := range cases {
+		if got := NormalizeSerial(in); got != want {
+			t.Errorf("NormalizeSerial(%q) = %q, esperava %q", in, got, want)
+		}
+	}
+}
+
+func TestDecodeBatch_RoundTrip(t *testing.T) {
+	in := []BatchItem{
+		{Acao: 5, Dedo: 2, Dedo2: 3, Rack: 8, Placa: 5, Slot: 4},
+		{Acao: 5, Dedo: 1, Dedo2: 4, Rack: 1, Placa: 1, Slot: 1},
+	}
+	data, err := EncodeBatch(in)
+	if err != nil {
+		t.Fatalf("EncodeBatch: %v", err)
+	}
+	out, err := DecodeBatch(data)
+	if err != nil {
+		t.Fatalf("DecodeBatch: %v", err)
+	}
+	if len(out) != BatchSize {
+		t.Fatalf("len = %d, esperava %d", len(out), BatchSize)
+	}
+	for i, want := range in {
+		if out[i] != want {
+			t.Errorf("item %d = %+v, esperava %+v", i, out[i], want)
+		}
+	}
+	for i := len(in); i < BatchSize; i++ {
+		if out[i] != (BatchItem{}) {
+			t.Errorf("item %d = %+v, esperava zerado", i, out[i])
+		}
+	}
+	if _, err := DecodeBatch(data[:10]); err == nil {
+		t.Fatal("esperava erro para frame curto")
+	}
+}

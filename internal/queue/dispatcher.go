@@ -44,15 +44,22 @@ func (q *Queue) Run(ctx context.Context, robot int32) {
 	}
 }
 
+// ackResult é o que o CLP deixou para a API ao subir o Ack: o status de cada item
+// (obrigatório) e, em lote de coleta, o serial lido em cada dedo (best-effort).
+type ackResult struct {
+	Items   []Item
+	Serials []FingerSerial // nil quando o lote não é coleta ou a leitura está desligada
+}
+
 // process executa um lote com retries até obter o ack ou esgotar as tentativas.
 func (q *Queue) process(ctx context.Context, rec Record) {
 	for {
 		q.transition(rec, StateDispatched, nil, "")
 
-		items, err := q.dispatch(ctx, rec)
+		ack, err := q.dispatch(ctx, rec)
 		if err == nil {
-			state, detail := classify(items)
-			q.transition(rec, state, items, detail)
+			state, detail := classify(ack.Items)
+			q.transition(rec, state, &ack, detail)
 			return
 		}
 		if ctx.Err() != nil {
@@ -77,12 +84,12 @@ func (q *Queue) process(ctx context.Context, rec Record) {
 // devolve os itens com o status que o CLP gravou em cada um. Diferente do modelo
 // de comando único, há o sinal Start: o CLP avisa que travou o lote antes de
 // executá-lo, e só depois vem o Ack.
-func (q *Queue) dispatch(ctx context.Context, rec Record) ([]Item, error) {
+func (q *Queue) dispatch(ctx context.Context, rec Record) (ackResult, error) {
 	robot := rec.Robot
 
 	// 1. Garante o slot do robô ocioso (Req=false, Start/Ack baixados).
 	if err := q.ensureIdle(ctx, robot); err != nil {
-		return nil, err
+		return ackResult{}, err
 	}
 
 	// 2. Escreve o lote e seus metadados — tudo ANTES do Req, que é o gatilho.
@@ -98,7 +105,7 @@ func (q *Queue) dispatch(ctx context.Context, rec Record) ([]Item, error) {
 
 	data, err := plc.EncodeBatch(toBatchItems(rec))
 	if err != nil {
-		return nil, err
+		return ackResult{}, err
 	}
 
 	// Depois do encode: o frame do array em hex, exatamente como o WriteStructRaw
@@ -109,66 +116,105 @@ func (q *Queue) dispatch(ctx context.Context, rec Record) ([]Item, error) {
 		"frame_len", len(data),
 		"frame_hex", fmt.Sprintf("%X", data))
 	if err := q.plc.WriteStructRaw(ctx, plc.TagLote(robot), data); err != nil {
-		return nil, fmt.Errorf("write %s: %w", plc.TagLote(robot), err)
+		return ackResult{}, fmt.Errorf("write %s: %w", plc.TagLote(robot), err)
 	}
 	if err := q.writeTag(ctx, plc.TagLoteQtd(robot), plc.TagValue{Kind: plc.KindInt, Int: rec.Qtd}); err != nil {
-		return nil, err
+		return ackResult{}, err
 	}
 	if err := q.writeTag(ctx, plc.TagLoteId(robot), plc.TagValue{Kind: plc.KindDInt, DInt: rec.BatchID}); err != nil {
-		return nil, err
+		return ackResult{}, err
 	}
 
 	// 3. Sinaliza lote pronto.
 	if err := q.writeBool(ctx, plc.TagLoteReq(robot), true); err != nil {
-		return nil, err
+		return ackResult{}, err
 	}
 
 	// 4. O CLP trava o lote e começa a executar.
 	if err := q.waitBool(ctx, plc.TagLoteStart(robot), true, q.cfg.StartTimeout); err != nil {
-		return nil, err
+		return ackResult{}, err
 	}
 	q.transition(rec, StateStarted, nil, "")
 
 	// 5. O CLP concluiu o lote (todos os .status gravados).
 	if err := q.waitBool(ctx, plc.TagLoteAck(robot), true, q.cfg.AckTimeout); err != nil {
-		return nil, err
+		return ackResult{}, err
 	}
 
-	// 6. Confere o eco do id e colhe o status de cada item.
-	items, err := q.readAck(ctx, rec)
+	// 6. Confere o eco do id, colhe o status de cada item e, em coleta, os serials.
+	ack, err := q.readAck(ctx, rec)
 	if err != nil {
-		return nil, err
+		return ackResult{}, err
 	}
 
 	// 7. Confirma o recebimento e 8. espera o CLP liberar o slot. Uma falha aqui
 	// não invalida o ack já lido — o ensureIdle do próximo lote recobra o slot.
 	if err := q.writeBool(ctx, plc.TagLoteReq(robot), false); err != nil {
-		return nil, err
+		return ackResult{}, err
 	}
 	_ = q.waitIdle(ctx, robot)
-	return items, nil
+	return ack, nil
 }
 
-// readAck confere o eco de gLote_Id_RoboN (correlação do ack) e lê
-// gLote_RoboN[i].status de cada item do lote.
-func (q *Queue) readAck(ctx context.Context, rec Record) ([]Item, error) {
+// readAck confere o eco de gLote_Id_RoboN (correlação do ack), lê
+// gLote_RoboN[i].status de cada item do lote e, em lote de coleta, gSerial_RoboN.
+// É o único ponto de leitura pós-Ack: dispatch e recoverFromAck passam por aqui,
+// então o serial também sobrevive a um reinício no meio do lote.
+func (q *Queue) readAck(ctx context.Context, rec Record) (ackResult, error) {
 	ackID, err := q.readInt(ctx, plc.TagLoteId(rec.Robot))
 	if err != nil {
-		return nil, err
+		return ackResult{}, err
 	}
 	if ackID != rec.BatchID {
-		return nil, fmt.Errorf("eco de %s = %d, esperava %d",
+		return ackResult{}, fmt.Errorf("eco de %s = %d, esperava %d",
 			plc.TagLoteId(rec.Robot), ackID, rec.BatchID)
 	}
 	items := append([]Item(nil), rec.Items...)
 	for i := range items {
 		st, err := q.readInt(ctx, plc.TagLoteItemStatus(rec.Robot, int(items[i].Position)))
 		if err != nil {
-			return nil, err
+			return ackResult{}, err
 		}
 		items[i].Status = int32(st)
 	}
-	return items, nil
+	res := ackResult{Items: items}
+	// Depois dos status, que são obrigatórios: o serial é opcional e só é escrito
+	// pela centralização, que o CLP executa após a coleta — inclusive na coleta
+	// vazia (Qtd=0), que existe justamente para centralizar uma passageira.
+	if rec.Acao == acaoColeta && q.cfg.ReadSerials {
+		res.Serials = q.readSerials(ctx, rec)
+	}
+	return res, nil
+}
+
+// readSerials lê gSerial_RoboN[1..5] e devolve sempre as 5 entradas. NUNCA retorna
+// erro: o Ack já aconteceu e o único retry disponível (process -> dispatch) reescreve
+// o lote e sobe gLote_Req de novo — o robô recoletaria células que já esvaziou. Uma
+// leitura falha vira serial vazio naquele dedo, e a memória segue anônima até o
+// serial chegar pelo início do teste, como antes desta integração.
+func (q *Queue) readSerials(ctx context.Context, rec Record) []FingerSerial {
+	out := make([]FingerSerial, 0, plc.BatchSize)
+	values := make([]string, 0, plc.BatchSize)
+	for dedo := 1; dedo <= plc.BatchSize; dedo++ {
+		tag := plc.TagSerial(rec.Robot, dedo)
+		serial := ""
+		v, err := q.plc.ReadTag(ctx, tag)
+		switch {
+		case err != nil:
+			q.log.Warn("gSerial: leitura falhou; dedo segue sem serial",
+				"batch_id", rec.BatchID, "robot", rec.Robot, "tag", tag, "err", err)
+		case v.Kind != plc.KindString:
+			q.log.Warn("gSerial: tipo inesperado; dedo segue sem serial",
+				"batch_id", rec.BatchID, "robot", rec.Robot, "tag", tag, "kind", v.Kind)
+		default:
+			serial = plc.NormalizeSerial(v.String)
+		}
+		out = append(out, FingerSerial{Dedo: int32(dedo), Serial: serial})
+		values = append(values, fmt.Sprintf("%d=%q", dedo, serial))
+	}
+	q.log.Info("gSerial ← CLP", "batch_id", rec.BatchID, "robot", rec.Robot,
+		"serials", strings.Join(values, " "))
+	return out
 }
 
 // classify decide o estado final do lote pelo status que o CLP gravou nos itens:
@@ -299,12 +345,12 @@ func (q *Queue) recoverFromAck(ctx context.Context, rec Record) bool {
 	if err != nil || !ack {
 		return false
 	}
-	items, err := q.readAck(ctx, rec) // confere o eco do id antes de aceitar o ack
+	res, err := q.readAck(ctx, rec) // confere o eco do id antes de aceitar o ack
 	if err != nil {
 		return false
 	}
-	state, detail := classify(items)
-	q.transition(rec, state, items, detail)
+	state, detail := classify(res.Items)
+	q.transition(rec, state, &res, detail)
 	_ = q.writeBool(ctx, plc.TagLoteReq(rec.Robot), false)
 	return true
 }
@@ -312,8 +358,8 @@ func (q *Queue) recoverFromAck(ctx context.Context, rec Record) bool {
 // --- helpers ---
 
 // transition persiste o novo estado do lote e publica a transição nos streams.
-// items != nil sobrescreve o status dos itens (o que o CLP gravou).
-func (q *Queue) transition(rec Record, state State, items []Item, detail string) {
+// ack != nil sobrescreve o que o CLP gravou: o status dos itens e os serials.
+func (q *Queue) transition(rec Record, state State, ack *ackResult, detail string) {
 	cur, ok, err := q.store.Get(rec.Robot, rec.BatchID)
 	if err != nil || !ok {
 		q.log.Error("transition: registro não encontrado",
@@ -322,8 +368,9 @@ func (q *Queue) transition(rec Record, state State, items []Item, detail string)
 	}
 	cur.State = state
 	cur.Detail = detail
-	if items != nil {
-		cur.Items = items
+	if ack != nil {
+		cur.Items = ack.Items
+		cur.Serials = ack.Serials
 	}
 	if err := q.store.Update(cur); err != nil {
 		q.log.Error("transition: persist", "batch_id", rec.BatchID, "robot", rec.Robot,

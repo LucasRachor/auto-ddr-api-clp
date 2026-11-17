@@ -14,6 +14,10 @@ type Config struct {
 	StartTimeout time.Duration // tempo máximo aguardando o Start (default: AckTimeout)
 	MaxRetries   int           // tentativas extras antes de marcar FAILED
 	PollEvery    time.Duration // intervalo de poll das tags do handshake
+	// ReadSerials liga a leitura de gSerial_RoboN[1..5] no ack de lote de coleta.
+	// Desligar só faz sentido em CLP que ainda não publica a tag (evita 5 leituras
+	// falhas + warnings por coleta). A leitura é best-effort e nunca falha o ack.
+	ReadSerials bool
 }
 
 // Queue leva os lotes do Nest até o CLP, com persistência durável (bbolt) e

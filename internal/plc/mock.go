@@ -2,6 +2,7 @@ package plc
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"os"
 	"strconv"
@@ -23,7 +24,20 @@ type Mock struct {
 	// ritmo real. Exige CMD_ACK_TIMEOUT_MS > actionMaxMS, senão o dispatch estoura.
 	actionMinMS int
 	actionMaxMS int
+
+	// Emulação do leitor de código (CLP_MOCK_SERIAL=1): o mock mantém um gêmeo
+	// mínimo de onde cada "memória" (identificada pelo serial) está — dedo da garra
+	// ou slot de placa — e, a cada coleta, varre os dedos ocupados escrevendo
+	// gSerial_RoboN[dedo], como a centralização real faz sobre gDedoOcupado. Dedos
+	// vazios ficam intocados (resíduo), também como no CLP. Default desligado: o
+	// harness antigo segue ligando o serial só no início do teste.
+	serialSim    bool
+	fingerSerial map[fingerKey]string
+	slotSerial   map[slotKey]string
 }
+
+type fingerKey struct{ robot, dedo int32 }
+type slotKey struct{ robot, rack, placa, slot int32 }
 
 func NewMock() *Mock {
 	min := envInt("CLP_MOCK_ACTION_MIN_MS", 0)
@@ -32,11 +46,14 @@ func NewMock() *Mock {
 		max = min
 	}
 	m := &Mock{
-		tags:        make(map[string]TagValue),
-		structs:     make(map[string][]byte),
-		status:      Status{Mode: "PROGRAM"},
-		actionMinMS: min,
-		actionMaxMS: max,
+		tags:         make(map[string]TagValue),
+		structs:      make(map[string][]byte),
+		status:       Status{Mode: "PROGRAM"},
+		actionMinMS:  min,
+		actionMaxMS:  max,
+		serialSim:    os.Getenv("CLP_MOCK_SERIAL") == "1",
+		fingerSerial: make(map[fingerKey]string),
+		slotSerial:   make(map[slotKey]string),
 	}
 	m.seedFeederFromEnv(os.Getenv("CLP_MOCK_FEEDER_PRESENT"))
 	return m
@@ -150,6 +167,11 @@ func (m *Mock) simulateBatch(tag string, v TagValue) {
 		for i := 1; i <= qtd; i++ {
 			m.tags[TagLoteItemStatus(robot, i)] = TagValue{Kind: KindInt, Int: ItemStatusOK}
 		}
+		// Os serials são gravados antes do Ack, como no CLP: quando o Ack sobe,
+		// gSerial já está válido (clp-software.md §gSerial).
+		if m.serialSim {
+			m.simulateSerials(robot, qtd)
+		}
 		// Start = robô travou o lote (imediato). Ack = robô terminou de executar.
 		m.tags[TagLoteStart(robot)] = TagValue{Kind: KindBool, Bool: true}
 
@@ -173,6 +195,58 @@ func (m *Mock) simulateBatch(tag string, v TagValue) {
 		}(robot, time.Duration(delay)*time.Millisecond)
 		return
 	}
+}
+
+// simulateSerials move as "memórias" do gêmeo do mock conforme os itens do lote
+// e, se o lote é de coleta, varre os dedos ocupados gravando gSerial_RoboN[dedo].
+// Chamado com m.mu já travado. A ação vem do frame (lote homogêneo: a do item 1);
+// a coleta vazia (qtd=0) é o único lote sem itens, então qtd=0 é coleta.
+func (m *Mock) simulateSerials(robot int32, qtd int) {
+	items, err := DecodeBatch(m.structs[TagLote(robot)])
+	if err != nil {
+		return
+	}
+	acao := int32(1)
+	if qtd > 0 {
+		acao = items[0].Acao
+	}
+	for i := 0; i < qtd && i < len(items); i++ {
+		it := items[i]
+		finger := fingerKey{robot, it.Dedo}
+		slot := slotKey{robot, it.Rack, it.Placa, it.Slot}
+		switch acao {
+		case 1: // coleta: a memória da célula de origem entra no dedo
+			m.fingerSerial[finger] = mockSerial(robot, it)
+		case 2: // inserção: do dedo para o slot
+			m.slotSerial[slot] = m.fingerSerial[finger]
+			delete(m.fingerSerial, finger)
+		case 3: // retirada: do slot para o dedo
+			m.fingerSerial[finger] = m.slotSerial[slot]
+			delete(m.slotSerial, slot)
+		case 4: // guarda: o dedo esvazia
+			delete(m.fingerSerial, finger)
+		case 5: // substituição: dedo retira do slot, dedo_2 insere nele
+			finger2 := fingerKey{robot, it.Dedo2}
+			m.fingerSerial[finger] = m.slotSerial[slot]
+			m.slotSerial[slot] = m.fingerSerial[finger2]
+			delete(m.fingerSerial, finger2)
+		}
+	}
+	if acao != 1 {
+		return
+	}
+	for dedo := int32(1); dedo <= BatchSize; dedo++ {
+		if s, ok := m.fingerSerial[fingerKey{robot, dedo}]; ok && s != "" {
+			m.tags[TagSerial(robot, int(dedo))] = TagValue{Kind: KindString, String: s}
+		}
+	}
+}
+
+// mockSerial é determinístico por (robô, célula de origem) e tem 18 caracteres,
+// o comprimento do serial real do cliente — assim o harness consegue prever o
+// serial de cada memória e escrever o mesmo valor no In.txt.
+func mockSerial(robot int32, it BatchItem) string {
+	return fmt.Sprintf("MK%d%d%d%d%02d%010d", robot, it.Estande, it.Bandeja, it.Fileira, it.Coluna, 0)
 }
 
 func (m *Mock) Status(context.Context) (Status, error) {

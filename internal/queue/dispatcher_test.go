@@ -2,9 +2,11 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,12 +15,17 @@ import (
 )
 
 // fakePLC simula o handshake de lote do CLP: ao ver gLote_Req_RoboN=TRUE, sobe o
-// Start, grava o status de cada item conforme o modo e sobe o Ack.
+// Start, grava o status de cada item conforme o modo e sobe o Ack. Em lote de
+// coleta também emula a centralização: grava gSerial_RoboN[dedo] de cada item com
+// o serial semeado em `serials` (por dedo); dedos sem seed ficam intocados.
 type fakePLC struct {
 	mu      sync.Mutex
 	tags    map[string]plc.TagValue
 	structs map[string][]byte
 	mode    string // "ok" | "error" | "timeout" (nem Start nem Ack) | "no-ack" (só Start)
+
+	serials        map[int32]string // dedo -> serial que a "centralização" grava
+	failSerialRead bool             // ReadTag de gSerial_* devolve erro
 }
 
 func newFakePLC(mode string) *fakePLC {
@@ -41,6 +48,9 @@ func (f *fakePLC) Status(context.Context) (plc.Status, error) {
 func (f *fakePLC) ReadTag(_ context.Context, tag string) (plc.TagValue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failSerialRead && strings.HasPrefix(tag, "gSerial_") {
+		return plc.TagValue{}, errors.New("GeneralStatus=0x5 (tag não publicada)")
+	}
 	return f.tags[tag], nil
 }
 
@@ -78,6 +88,17 @@ func (f *fakePLC) WriteTag(_ context.Context, tag string, v plc.TagValue) error 
 		qtd := int(f.tags[plc.TagLoteQtd(robot)].Int)
 		for i := 1; i <= qtd; i++ {
 			f.tags[plc.TagLoteItemStatus(robot, i)] = plc.TagValue{Kind: plc.KindInt, Int: status}
+		}
+		// Centralização: só após coleta (acao do frame), e só nos dedos do lote.
+		if items, err := plc.DecodeBatch(f.structs[plc.TagLote(robot)]); err == nil {
+			for i := 0; i < qtd; i++ {
+				if items[i].Acao != 1 {
+					break
+				}
+				if s, ok := f.serials[items[i].Dedo]; ok {
+					f.tags[plc.TagSerial(robot, int(items[i].Dedo))] = plc.TagValue{Kind: plc.KindString, String: s}
+				}
+			}
 		}
 		f.tags[plc.TagLoteAck(robot)] = plc.TagValue{Kind: plc.KindBool, Bool: true}
 	}
@@ -135,7 +156,119 @@ func runAll(t *testing.T, q *Queue) {
 }
 
 func fastCfg() Config {
-	return Config{AckTimeout: time.Second, PollEvery: 5 * time.Millisecond}
+	return Config{AckTimeout: time.Second, PollEvery: 5 * time.Millisecond, ReadSerials: true}
+}
+
+// serialsByDedo indexa rec.Serials por dedo para as asserções.
+func serialsByDedo(t *testing.T, rec Record) map[int32]string {
+	t.Helper()
+	if len(rec.Serials) != plc.BatchSize {
+		t.Fatalf("serials = %d entradas, esperava %d (sempre os 5 dedos)", len(rec.Serials), plc.BatchSize)
+	}
+	out := make(map[int32]string, len(rec.Serials))
+	for i, fs := range rec.Serials {
+		if fs.Dedo != int32(i+1) {
+			t.Fatalf("serials[%d].dedo = %d, esperava %d", i, fs.Dedo, i+1)
+		}
+		out[fs.Dedo] = fs.Serial
+	}
+	return out
+}
+
+// Coleta: no ack o dispatcher lê gSerial_RoboN[1..5] e entrega os 5 dedos — os do
+// lote com serial, os demais vazios (dedo vazio ou leitura falha: o Nest decide).
+func TestDispatch_ColetaReadsSerials(t *testing.T) {
+	fake := newFakePLC("ok")
+	fake.serials = map[int32]string{1: "SN0001", 2: "SN0002\x00\x00", 3: "SN0003"}
+	q := newTestQueue(t, fake, fastCfg())
+	runAll(t, q)
+
+	if _, _, err := q.Enqueue(batch(401, 1, 3)); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	rec := waitState(t, q, 1, 401, StateAckedOK)
+	got := serialsByDedo(t, rec)
+	want := map[int32]string{1: "SN0001", 2: "SN0002", 3: "SN0003", 4: "", 5: ""}
+	for dedo, s := range want {
+		if got[dedo] != s {
+			t.Errorf("dedo %d: serial = %q, esperava %q", dedo, got[dedo], s)
+		}
+	}
+}
+
+// Coleta vazia (Qtd=0) existe para centralizar uma passageira: não há itens, mas
+// o serial do dedo que já estava ocupado tem de ser lido mesmo assim.
+func TestDispatch_EmptyColetaReadsSerials(t *testing.T) {
+	fake := newFakePLC("ok")
+	fake.tags[plc.TagSerial(2, 4)] = plc.TagValue{Kind: plc.KindString, String: "PASSAGEIRA"} // resíduo/varredura
+	q := newTestQueue(t, fake, fastCfg())
+	runAll(t, q)
+
+	if _, _, err := q.Enqueue(Record{BatchID: 402, Robot: 2, Acao: 1, Qtd: 0}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	rec := waitState(t, q, 2, 402, StateAckedOK)
+	if got := serialsByDedo(t, rec)[4]; got != "PASSAGEIRA" {
+		t.Fatalf("dedo 4: serial = %q, esperava PASSAGEIRA", got)
+	}
+}
+
+// Fora da coleta gSerial é resíduo: o dispatcher nem lê, e o registro vai sem serials.
+func TestDispatch_NoSerialsOutsideColeta(t *testing.T) {
+	fake := newFakePLC("ok")
+	fake.tags[plc.TagSerial(1, 1)] = plc.TagValue{Kind: plc.KindString, String: "RESIDUO"}
+	q := newTestQueue(t, fake, fastCfg())
+	runAll(t, q)
+
+	rec := Record{BatchID: 403, Robot: 1, Acao: 2, Qtd: 1, Items: []Item{
+		{Position: 1, Dedo: 1, Rack: 1, Placa: 1, Slot: 1},
+	}}
+	if _, _, err := q.Enqueue(rec); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if got := waitState(t, q, 1, 403, StateAckedOK); got.Serials != nil {
+		t.Fatalf("serials = %+v, esperava nil em acao=2", got.Serials)
+	}
+}
+
+// A leitura do serial é best-effort: o Ack já aconteceu, e falhar aqui faria o
+// process() redespachar o lote — o robô recoletaria células já vazias. Erro de
+// leitura vira serial vazio, sem retry e sem mudar o desfecho do lote.
+func TestDispatch_SerialReadErrorDoesNotFailAck(t *testing.T) {
+	fake := newFakePLC("ok")
+	fake.failSerialRead = true
+	q := newTestQueue(t, fake, fastCfg())
+	runAll(t, q)
+
+	if _, _, err := q.Enqueue(batch(404, 1, 2)); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	rec := waitState(t, q, 1, 404, StateAckedOK)
+	if rec.Attempts != 0 {
+		t.Fatalf("attempts = %d, esperava 0 (sem redespacho)", rec.Attempts)
+	}
+	for dedo, s := range serialsByDedo(t, rec) {
+		if s != "" {
+			t.Errorf("dedo %d: serial = %q, esperava vazio", dedo, s)
+		}
+	}
+}
+
+// Com a leitura desligada (CLP sem a tag publicada) o lote vai sem serials.
+func TestDispatch_SerialReadDisabled(t *testing.T) {
+	fake := newFakePLC("ok")
+	fake.serials = map[int32]string{1: "SN0001"}
+	cfg := fastCfg()
+	cfg.ReadSerials = false
+	q := newTestQueue(t, fake, cfg)
+	runAll(t, q)
+
+	if _, _, err := q.Enqueue(batch(405, 1, 1)); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if rec := waitState(t, q, 1, 405, StateAckedOK); rec.Serials != nil {
+		t.Fatalf("serials = %+v, esperava nil com ReadSerials=false", rec.Serials)
+	}
 }
 
 func TestDispatch_AckOK(t *testing.T) {
@@ -336,12 +469,19 @@ func TestRecover_FinalizesFromAck(t *testing.T) {
 	for i := 1; i <= 2; i++ {
 		fake.tags[plc.TagLoteItemStatus(1, i)] = plc.TagValue{Kind: plc.KindInt, Int: plc.ItemStatusOK}
 	}
+	// A centralização já rodou antes do crash: o serial está no CLP esperando.
+	fake.tags[plc.TagSerial(1, 2)] = plc.TagValue{Kind: plc.KindString, String: "SN-RECOVER"}
 
 	if err := q.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
-	if rec, _, _ := q.store.Get(1, 301); rec.State != StateAckedOK {
+	rec, _, _ = q.store.Get(1, 301)
+	if rec.State != StateAckedOK {
 		t.Fatalf("estado = %q, esperava ACKED_OK", rec.State)
+	}
+	// O serial não pode se perder num reinício: recoverFromAck passa pelo mesmo readAck.
+	if got := serialsByDedo(t, rec)[2]; got != "SN-RECOVER" {
+		t.Fatalf("dedo 2 após Recover: serial = %q, esperava SN-RECOVER", got)
 	}
 }
 

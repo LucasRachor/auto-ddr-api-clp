@@ -3,6 +3,7 @@ package plc
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 )
 
 // Tags do handshake de LOTE (gLote), duplicadas por robô — cada robô tem o seu
@@ -46,6 +47,29 @@ func TagLoteItemStatus(robot int32, i int) string {
 	return fmt.Sprintf("gLote_Robo%d[%d].status", robot, i)
 }
 
+// TagSerial endereça gSerial_RoboN[dedo] (ARRAY[1..5] OF STRING[32]): o serial que
+// o leitor de código gravou para a memória carregada por aquele dedo, durante a
+// centralização. Índice base-1, como o array declarado no Sysmac. CLP -> API, sem
+// handshake: válido quando sobe o Ack de um lote de coleta (clp-software.md §gSerial).
+func TagSerial(robot int32, dedo int) string {
+	return fmt.Sprintf("gSerial_Robo%d[%d]", robot, dedo)
+}
+
+// NormalizeSerial limpa o STRING lido do CLP antes de entregá-lo ao backend: tira
+// NUL (byte de preenchimento do leitor) e espaços das pontas. Se ainda sobrar
+// caractere de controle no meio, devolve "" — melhor a memória seguir anônima (o
+// serial chega no início do teste) do que ligar lixo a ela, que viraria divergência
+// no cruzamento com o arquivo do cliente.
+func NormalizeSerial(s string) string {
+	s = strings.Trim(s, "\x00 \t\r\n")
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return s
+}
+
 // BatchItem é um elemento do UDT TComando. Os campos não aplicáveis à ação do
 // lote vão zerados (a validação em internal/queue/action.go garante isso).
 // O membro .status não está aqui: quem o grava é o CLP, e a API sempre envia 0.
@@ -86,4 +110,25 @@ func EncodeBatch(items []BatchItem) ([]byte, error) {
 		}
 	}
 	return data, nil
+}
+
+// DecodeBatch é o inverso de EncodeBatch: devolve os BatchSize elementos do frame
+// (o .status não entra no BatchItem). Usado pelo CLP simulado para saber o que o
+// lote pede sem depender de tags avulsas.
+func DecodeBatch(data []byte) ([]BatchItem, error) {
+	if len(data) != BatchSize*tcomandoBytes {
+		return nil, fmt.Errorf("frame com %d bytes: esperava %d", len(data), BatchSize*tcomandoBytes)
+	}
+	items := make([]BatchItem, BatchSize)
+	for i := range items {
+		off := i * tcomandoBytes
+		m := func(j int) int32 {
+			return int32(int16(binary.LittleEndian.Uint16(data[off+j*2:])))
+		}
+		items[i] = BatchItem{
+			Acao: m(0), Dedo: m(1), Dedo2: m(2), Estande: m(3), Bandeja: m(4),
+			Fileira: m(5), Coluna: m(6), Rack: m(7), Placa: m(8), Slot: m(9),
+		}
+	}
+	return items, nil
 }

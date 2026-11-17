@@ -85,6 +85,7 @@ func main() {
 		StartTimeout: time.Duration(cfg.StartTimeoutMS) * time.Millisecond,
 		MaxRetries:   cfg.MaxRetries,
 		PollEvery:    time.Duration(cfg.CmdPollMS) * time.Millisecond,
+		ReadSerials:  cfg.BatchSerialRead,
 	})
 	if err := q.Recover(ctx); err != nil {
 		log.Error("queue recover", "err", err)

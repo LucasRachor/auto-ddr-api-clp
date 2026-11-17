@@ -122,6 +122,9 @@ que tem um sinal a mais que o `gCmd` (o `Start` intermediário):
 4. espera gLote_Ack_RoboN  = TRUE                                    (CLP terminou)
 5. confere gLote_Id_RoboN (eco) e lê gLote_RoboN[i].status (i=1..qtd)
    -> ACKED_OK se todos 1; ACKED_ERROR se algum 2                 (emite items[])
+   se acao=1 (inclusive qtd=0): lê gSerial_RoboN[1..5] (STRING 0xD0, elemento a
+   elemento) — best-effort, NUNCA falha o ack (o retry redespacharia o lote e o
+   robô recoletaria células vazias); leitura falha = serial ""  (emite serials[])
 6. gLote_Req_RoboN = FALSE
 7. espera gLote_Start_RoboN=FALSE e gLote_Ack_RoboN=FALSE          // slot do robô livre
 ```
@@ -130,12 +133,13 @@ Timeout em (3)/(4) → retry/backoff → `BQ_FAILED` (persistido). Poll a cada `
 
 ### 5. Store / fila (`internal/queue/store.go`, `queue.go`)
 
-- **Record de lote**: `{batch_id, robot, acao, qtd, items[], state, item_status[], detail, ts}`.
-  Chave inclui `robot` (2 slots independentes).
+- **Record de lote**: `{batch_id, robot, acao, qtd, items[], serials[], state, item_status[], detail, ts}`.
+  Chave inclui `robot` (2 slots independentes). `serials[]` só existe em lote de coleta
+  (sempre 5 entradas `{dedo, serial}`); persiste no bbolt e vai no replay como o resto.
 - Idempotência por `(robot, batch_id)`.
 - Estados: `QUEUED → DISPATCHED → STARTED → ACKED_OK | ACKED_ERROR | FAILED`.
-- Broker publica `BatchStatusUpdate` (com `items[]`) por transição; replay no connect do
-  que não teve `ConfirmBatchStatus`.
+- Broker publica `BatchStatusUpdate` (com `items[]` e `serials[]`) por transição; replay
+  no connect do que não teve `ConfirmBatchStatus`.
 - `Recover()`: reconciliar `DISPATCHED/STARTED` lendo `gLote_Id_RoboN`+`Ack`
   (evita reexecução).
 
@@ -153,11 +157,17 @@ Timeout em (3)/(4) → retry/backoff → `BQ_FAILED` (persistido). Poll a cada `
 
 Reusar `CMD_ACK_TIMEOUT_MS`, `CMD_MAX_RETRIES`, `CMD_POLL_MS`, `QUEUE_DB_PATH`.
 Opcional `BATCH_START_TIMEOUT_MS` (timeout específico do `Start`).
+`BATCH_SERIAL_READ=0` desliga a leitura de `gSerial_RoboN` (CLP sem a tag publicada).
 
 ### 8. Mock (`internal/plc/mock.go`)
 
 Simular o lote: ao ver `gLote_Req_RoboN`, subir `Start`, preencher `status[i]=1`, subir
 `Ack`; ao ver `Req=FALSE`, baixar `Start`/`Ack`. Base dos testes sem CLP.
+
+Com `CLP_MOCK_SERIAL=1`, emular também o leitor: um gêmeo mínimo (dedo/slot → serial)
+movido pelos itens de cada lote (decodificados do frame via `DecodeBatch`); em coleta,
+varrer os dedos ocupados e gravar `gSerial_RoboN[dedo]` antes de subir o `Ack`. Dedos
+vazios ficam intocados (resíduo, como no CLP).
 
 ## Compatibilidade
 
